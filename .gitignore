@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+
+# Django
+*.sqlite3
+media/
+staticfiles/
+backend/perf-results/
+
+# Environment
+.env
+.env.local
+/deploy/soc-compose/compose.override.yaml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Node
+node_modules/
+
+# Local git worktrees
+.worktrees/
+
+# OS
+.DS_Store
+Thumbs.db
+
+.claude/*
+.soc/
+
+docs/

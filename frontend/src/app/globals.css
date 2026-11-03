@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens - dark SOC console.
+ * Chart series + status colours come from the validated data-viz palette
+ * (dark steps, checked against the panel surface #14171c).
+ */
+@theme {
+  --font-sans: "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, Consolas, monospace;
+
+  --color-bg: #0b0d11;
+  --color-panel: #14171c;
+  --color-panel-2: #1b1f26;
+  --color-line: #262b33;
+  --color-line-strong: #343a44;
+
+  --color-ink: #eceef2;
+  --color-ink-2: #b4bac5;
+  --color-ink-3: #7d8593;
+
+  --color-accent: #3987e5;
+  --color-accent-strong: #2a78d6;
+
+  /* categorical series (dark steps) */
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+
+  /* status (reserved: never used as a series colour) */
+  --color-good: #0ca30c;
+  --color-warning: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-accent) 40%, transparent);
+}
+
+/* thin scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-accent) 60%, transparent); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+.animate-pulse-ring {
+  animation: pulse-ring 1.4s ease-out infinite;
+}
+
+@keyframes dash-flow {
+  to { stroke-dashoffset: -16; }
+}
+.animate-dash {
+  animation: dash-flow 0.8s linear infinite;
+}
+
+@media print {
+  html, body { background: #fff !important; color: #000 !important; }
+  .no-print { display: none !important; }
+  .print-plain { background: #fff !important; color: #000 !important; border-color: #ccc !important; }
+}
