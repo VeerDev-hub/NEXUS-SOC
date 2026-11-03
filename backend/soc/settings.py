@@ -72,6 +72,8 @@ INSTALLED_APPS = [
     "apps.webhook",
     "apps.agentic",
     "apps.agent_api",
+    "apps.livedetect",
+    "apps.notifications",
 ]
 
 MIDDLEWARE = [
@@ -108,6 +110,39 @@ ASGI_APPLICATION = "soc.asgi.application"
 
 # Pause per offline agent step (ms) so live demos can follow the timeline; 0 disables.
 AGENT_OFFLINE_STEP_DELAY_MS = _env_int("AGENT_OFFLINE_STEP_DELAY_MS", 700, minimum=0)
+
+
+def _env_list(name, default=""):
+    return [item.strip() for item in os.environ.get(name, default).split(",") if item.strip()]
+
+
+# ---- Alert emails --------------------------------------------------------------
+# Without EMAIL_HOST, emails are printed to the worker console instead of sent.
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_PORT = _env_int("EMAIL_PORT", 587)
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_SSL = _env_bool("EMAIL_USE_SSL", EMAIL_PORT == 465)
+EMAIL_USE_TLS = _env_bool("EMAIL_USE_TLS", not EMAIL_USE_SSL)
+EMAIL_TIMEOUT = _env_int("EMAIL_TIMEOUT", 20)
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND") or (
+    "django.core.mail.backends.smtp.EmailBackend" if EMAIL_HOST else "django.core.mail.backends.console.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL") or (f"NEXUS-SOC <{EMAIL_HOST_USER}>" if EMAIL_HOST_USER else "NEXUS-SOC <nexus-soc@localhost>")
+
+ALERT_EMAIL_ENABLED = _env_bool("ALERT_EMAIL_ENABLED", True)
+ALERT_EMAIL_TO = _env_list("ALERT_EMAIL_TO")
+ALERT_EMAIL_MIN_SEVERITY = os.environ.get("ALERT_EMAIL_MIN_SEVERITY", "High")
+ALERT_EMAIL_VERDICTS = _env_list("ALERT_EMAIL_VERDICTS", "True Positive,Suspicious")
+SOC_CONSOLE_URL = os.environ.get("SOC_CONSOLE_URL", "http://localhost:3000")
+
+# ---- Live log detection --------------------------------------------------------
+LIVE_SYSLOG_HOST = os.environ.get("LIVE_SYSLOG_HOST", "0.0.0.0")
+LIVE_SYSLOG_PORT = _env_int("LIVE_SYSLOG_PORT", 5514, minimum=0)
+LIVE_TAIL_FILES = _env_list("LIVE_TAIL_FILES")
+LIVE_WINDOWS_EVENTLOG = os.environ.get("LIVE_WINDOWS_EVENTLOG", "auto")
+LIVE_WINDOWS_CHANNELS = _env_list("LIVE_WINDOWS_CHANNELS")
+LIVE_DETECTION_COOLDOWN_SECONDS = _env_int("LIVE_DETECTION_COOLDOWN_SECONDS", 600, minimum=0)
 
 USE_TZ = True
 TIME_ZONE = os.environ.get("DJANGO_TIME_ZONE", "Asia/Kolkata")

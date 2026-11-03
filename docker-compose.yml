@@ -80,6 +80,17 @@ services:
       init:
         condition: service_completed_successfully
 
+  # Live log detection: syslog listener on UDP/TCP 5514 (the Windows Event Log needs the native command).
+  live-detection:
+    <<: *backend
+    command: ["python", "manage.py", "run_live_detection", "--windows", "off", "--syslog-port", "5514"]
+    ports:
+      - "${LIVE_SYSLOG_PORT:-5514}:5514/udp"
+      - "${LIVE_SYSLOG_PORT:-5514}:5514/tcp"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
   frontend:
     build:
       context: ./frontend

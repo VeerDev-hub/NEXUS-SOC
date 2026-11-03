@@ -5,7 +5,7 @@
 .DESCRIPTION
   1. Starts PostgreSQL + Redis in Docker (development/docker/compose.yaml)
   2. Applies migrations and makes sure demo users exist
-  3. Opens three terminal windows: API (uvicorn), agent worker, Next.js frontend
+  3. Opens four terminal windows: API (uvicorn), agent worker, Next.js frontend, live log detection
 
 .PARAMETER Seed
   Rebuild the two-week demo history (wipes existing cases).
@@ -56,9 +56,12 @@ Step "Launching API, agent worker and frontend in new windows"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$backend'; `$Host.UI.RawUI.WindowTitle='SOC API'; & '$python' -m uvicorn soc.asgi:application --host 127.0.0.1 --port 8000"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$backend'; `$Host.UI.RawUI.WindowTitle='SOC agent worker'; & '$python' manage.py run_agentic_case_analysis_worker --interval 1"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$frontend'; `$Host.UI.RawUI.WindowTitle='SOC frontend'; npm run dev"
+# Live detection reads the Windows Security log only when this window runs as Administrator.
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$backend'; `$Host.UI.RawUI.WindowTitle='SOC live detection'; & '$python' manage.py run_live_detection"
 
 Write-Host "`nNEXUS-SOC is starting:" -ForegroundColor Green
 Write-Host "  Console : http://localhost:3000"
 Write-Host "  API docs: http://localhost:8000/api/docs/"
+Write-Host "  Syslog  : UDP/TCP port 5514 (live detection)"
 Write-Host "  Logins  : analyst / responder / manager / auditor / admin   (password SocDemo@2026)"
-Write-Host "Close the three windows to stop. Docker services keep running (docker compose -f development\docker\compose.yaml stop)."
+Write-Host "Close the four windows to stop. Docker services keep running (docker compose -f development\docker\compose.yaml stop)."

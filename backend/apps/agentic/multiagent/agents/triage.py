@@ -1,3 +1,5 @@
+import re
+
 from apps.agentic.multiagent.agents.base import BaseAgent
 from apps.agentic.multiagent.schemas import TriageResult
 
@@ -13,6 +15,8 @@ CATEGORY_RULES = [
     (("scan", "recon", "port sweep"), "Reconnaissance"),
 ]
 FALSE_POSITIVE_HINTS = ("test", "pentest", "authorized", "simulation", "scanner", "whitelist", "known benign", "red team")
+# Whole words only, so "latest", "contest" or "attestation" in a log line do not mark a real attack benign.
+_FP_PATTERNS = [(hint, re.compile(rf"\b{re.escape(hint)}\b")) for hint in FALSE_POSITIVE_HINTS]
 
 
 def _level(value):
@@ -49,7 +53,7 @@ class TriageAgent(BaseAgent):
         )
         alert_severity = _max_level([a.get("severity") for a in ctx.alerts()] + [ctx.payload.get("severity")], "Medium")
         knowledge_text = " ".join(str(k.get("body", "")) + str(k.get("title", "")) for k in evidence.get("knowledge", [])).lower()
-        fp_hits = [hint for hint in FALSE_POSITIVE_HINTS if hint in text or hint in knowledge_text]
+        fp_hits = [hint for hint, pattern in _FP_PATTERNS if pattern.search(text) or pattern.search(knowledge_text)]
         related = evidence.get("related_cases", [])
         duplicate = any(r.get("title") == ctx.payload.get("title") and r.get("status") not in ("Closed", "Resolved") for r in related)
         high_conf_alerts = any((a.get("confidence") or "").lower() == "high" for a in ctx.alerts())

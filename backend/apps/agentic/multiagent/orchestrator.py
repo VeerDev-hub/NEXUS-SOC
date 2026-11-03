@@ -16,6 +16,7 @@ from apps.agentic.multiagent.schemas import FINISH
 from apps.agentic.multiagent.supervisor import Supervisor
 from apps.agentic.multiagent.tools import Toolbox
 from apps.cases.escalation import maybe_auto_escalate
+from apps.notifications.service import notify_case_verdict
 from apps.settings.runtime_config import get_runtime_config
 
 logger = logging.getLogger(__name__)
@@ -162,6 +163,10 @@ class Orchestrator:
         run.completed_at = timezone.now()
         run.save()
         maybe_auto_escalate(run.case, verdict=run.final_verdict, severity=run.final_severity, summary=run.summary)
+        try:
+            notify_case_verdict(run)
+        except Exception:
+            logger.exception("Alert notification failed for case %s", run.case_id)
         events.run_event("agent.run.completed", run)
 
 
