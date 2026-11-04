@@ -20,6 +20,7 @@ PROVIDER_DEEPSEEK = "deepseek"
 PROVIDER_OPENAI = "openai"
 PROVIDER_GEMINI = "gemini"
 PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
+PROVIDER_OLLAMA = "ollama"
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,16 @@ PROVIDERS = {
         structured_method="function_calling",
         api_key_env="GEMINI_API_KEY",
     ),
+    # Ollama honours OpenAI's json_schema response format with grammar-constrained
+    # decoding; its tool calling on small local models drops required fields.
+    PROVIDER_OLLAMA: ProviderSpec(
+        key=PROVIDER_OLLAMA,
+        label="Ollama (local)",
+        default_base_url="http://localhost:11434/v1",
+        default_model="qwen2.5:7b",
+        structured_method="json_schema",
+        api_key_env="",
+    ),
     PROVIDER_OPENAI_COMPATIBLE: ProviderSpec(
         key=PROVIDER_OPENAI_COMPATIBLE,
         label="OpenAI-compatible",
@@ -85,6 +96,8 @@ def guess_provider(base_url):
         return PROVIDER_GEMINI
     if "api.openai.com" in url:
         return PROVIDER_OPENAI
+    if ":11434" in url:
+        return PROVIDER_OLLAMA
     return PROVIDER_OPENAI_COMPATIBLE
 
 

@@ -18,7 +18,7 @@ interface Runtime {
 interface Provider {
   id: string;
   name: string;
-  provider: "deepseek" | "openai" | "gemini" | "openai_compatible";
+  provider: "deepseek" | "openai" | "gemini" | "ollama" | "openai_compatible";
   base_url: string;
   model: string;
   api_key_configured: boolean;
@@ -31,7 +31,8 @@ const PROVIDERS = {
   deepseek: { label: "DeepSeek", base_url: "https://api.deepseek.com", model: "deepseek-chat" },
   openai: { label: "OpenAI", base_url: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
   gemini: { label: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai/", model: "gemini-2.5-flash" },
-  openai_compatible: { label: "OpenAI-compatible (Ollama, vLLM...)", base_url: "http://localhost:11434/v1", model: "" },
+  ollama: { label: "Ollama (local)", base_url: "http://localhost:11434/v1", model: "qwen2.5:7b" },
+  openai_compatible: { label: "OpenAI-compatible (vLLM, OpenRouter...)", base_url: "http://localhost:11434/v1", model: "" },
 } as const;
 
 const MODES = [
