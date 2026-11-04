@@ -58,8 +58,9 @@ def format_title(template, fields):
 
 
 class DetectionEngine:
-    def __init__(self, rules=None, *, emit=None, cooldown_seconds=600):
+    def __init__(self, rules=None, *, emit=None, cooldown_seconds=600, baseline=None):
         self.rules = list(rules if rules is not None else RULES)
+        self.baseline = baseline  # optional BaselineEngine (behavioural anomalies)
         self.emit = emit if emit is not None else create_detection_alert
         self.cooldown = timedelta(seconds=cooldown_seconds)
         self._hits = defaultdict(deque)  # (rule_id, key) -> deque[(ts, distinct_value, fields_dict)]
@@ -87,6 +88,11 @@ class DetectionEngine:
             detection = self._evaluate(rule, event, matched)
             if detection is not None:
                 detections.append(detection)
+        if self.baseline is not None:
+            for anomaly in self.baseline.observe(event):
+                detection = self._from_anomaly(anomaly, event)
+                if detection is not None:
+                    detections.append(detection)
         if self._processed % 2000 == 0:
             self._collect_garbage(event.timestamp)
         for detection in detections:
@@ -134,15 +140,27 @@ class DetectionEngine:
                 return None
             count = len(prior)
 
-        fired_key = (rule.id, key)
-        last = self._last_fired.get(fired_key)
-        if last is not None and abs(now - last) < self.cooldown:
+        if not self._cooldown_passed(rule.id, key, now):
             return None
-        self._last_fired[fired_key] = now
 
         fields["count"] = count
         evidence = [item[2]["_event"] for item in list(hits)[-10:]]
         return Detection(rule=rule, fields=fields, count=count, event=event, evidence=evidence)
+
+    def _cooldown_passed(self, rule_id, key, now):
+        fired_key = (rule_id, key)
+        last = self._last_fired.get(fired_key)
+        if last is not None and abs(now - last) < self.cooldown:
+            return False
+        self._last_fired[fired_key] = now
+        return True
+
+    def _from_anomaly(self, anomaly, event):
+        fields = {"host": event.host, **{k: v for k, v in anomaly.fields.items() if v not in (None, "")}}
+        if not self._cooldown_passed(anomaly.rule.id, self._key(anomaly.rule, fields), event.timestamp):
+            return None
+        fields["count"] = 1
+        return Detection(rule=anomaly.rule, fields=fields, count=1, event=event, evidence=[event.as_dict()])
 
     def _collect_garbage(self, now):
         cutoff = now - self._max_window
@@ -189,16 +207,18 @@ def detection_artifacts(fields):
     return artifacts
 
 
-def _confidence(rule):
+def _confidence(rule, fields=None):
+    if rule.id.startswith("ueba."):
+        return "Medium" if (fields or {}).get("anomaly_score", 0) >= 70 else "Low"
     if rule.after is not None or rule.id.startswith("command.") or rule.severity == "Critical":
         return "High"
     return "Medium"
 
 
-def create_detection_alert(detection):
+def create_detection_alert(detection, *, schedule_analysis=True):
     rule, fields, event = detection.rule, detection.fields, detection.event
     title = detection.title
-    confidence = _confidence(rule)
+    confidence = _confidence(rule, fields)
     impact = rule.severity if rule.severity in ("Low", "Medium", "High", "Critical") else "Unknown"
     keys = [fields.get(name, "") for name in rule.group_by] or [event.host]
     correlation_uid = generate_correlation_uid(rule_id=f"live.{rule.id}", time_window="24h", keys=keys, timestamp=event.timestamp)
@@ -208,6 +228,13 @@ def create_detection_alert(detection):
     public_fields = {k: v for k, v in fields.items() if not k.startswith("_")}
     # The source path/peer lives in data_sources, not in free text the agents reason over.
     description = f"{rule.description} Detected live by NEXUS-SOC from {event.source} logs. {detection.count} matching event(s)."
+    behavioural = rule.id.startswith("ueba.")
+    if behavioural:
+        reasons = "; ".join(fields.get("anomaly_reasons") or [])
+        description = (
+            f"{rule.description} Behavioural baseline deviation (anomaly score {fields.get('anomaly_score', 0)}/100, "
+            f"entity risk {fields.get('entity_risk', 0)}/100): {reasons}. Detected live by NEXUS-SOC from {event.source} logs."
+        )
 
     result = create_alert_with_context(
         case_defaults={
@@ -233,8 +260,8 @@ def create_detection_alert(detection):
             "rule_name": rule.title.split(" {")[0][:255],
             "correlation_uid": correlation_uid,
             "source_uid": str(event.fields.get("record_id") or ""),
-            "analytic_type": AlertAnalyticType.RULE if rule.threshold == 1 and not rule.after else AlertAnalyticType.STATISTICAL,
-            "analytic_name": "NEXUS-SOC Live Detection",
+            "analytic_type": AlertAnalyticType.BEHAVIORAL if behavioural else (AlertAnalyticType.RULE if rule.threshold == 1 and not rule.after else AlertAnalyticType.STATISTICAL),
+            "analytic_name": "NEXUS-SOC Behavioural Baseline" if behavioural else "NEXUS-SOC Live Detection",
             "analytic_desc": rule.description,
             "product_category": rule.category,
             "product_name": "NEXUS-SOC Live Detection",
@@ -254,7 +281,7 @@ def create_detection_alert(detection):
         },
         artifacts=detection_artifacts(fields),
         enrichments=[],
-        schedule_analysis=True,
+        schedule_analysis=schedule_analysis,
         analysis_trigger=f"live:{rule.id}"[:100],
     )
     logger.warning(

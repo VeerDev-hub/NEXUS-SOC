@@ -21,6 +21,7 @@ PROVIDER_OPENAI = "openai"
 PROVIDER_GEMINI = "gemini"
 PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
 PROVIDER_OLLAMA = "ollama"
+PROVIDER_OPENROUTER = "openrouter"
 
 
 @dataclass(frozen=True)
@@ -64,9 +65,20 @@ PROVIDERS = {
         key=PROVIDER_OLLAMA,
         label="Ollama (local)",
         default_base_url="http://localhost:11434/v1",
-        default_model="qwen2.5:7b",
+        default_model="qwen2.5-soc:7b-16k",
         structured_method="json_schema",
         api_key_env="",
+    ),
+    # One key, many models. Anthropic models behind OpenRouter reject the forced
+    # tool_choice LangChain uses for function calling, so use json_schema (structured
+    # outputs), which Anthropic, OpenAI and Google models all support.
+    PROVIDER_OPENROUTER: ProviderSpec(
+        key=PROVIDER_OPENROUTER,
+        label="OpenRouter",
+        default_base_url="https://openrouter.ai/api/v1",
+        default_model="",
+        structured_method="json_schema",
+        api_key_env="OPENROUTER_API_KEY",
     ),
     PROVIDER_OPENAI_COMPATIBLE: ProviderSpec(
         key=PROVIDER_OPENAI_COMPATIBLE,
@@ -81,7 +93,7 @@ PROVIDERS = {
 PROVIDER_CHOICES = [(spec.key, spec.label) for spec in PROVIDERS.values()]
 
 # Order used when building configs from environment variables.
-ENV_PROVIDER_ORDER = (PROVIDER_DEEPSEEK, PROVIDER_OPENAI, PROVIDER_GEMINI)
+ENV_PROVIDER_ORDER = (PROVIDER_OPENROUTER, PROVIDER_DEEPSEEK, PROVIDER_OPENAI, PROVIDER_GEMINI)
 
 
 def get_provider_spec(key):
@@ -96,6 +108,8 @@ def guess_provider(base_url):
         return PROVIDER_GEMINI
     if "api.openai.com" in url:
         return PROVIDER_OPENAI
+    if "openrouter.ai" in url:
+        return PROVIDER_OPENROUTER
     if ":11434" in url:
         return PROVIDER_OLLAMA
     return PROVIDER_OPENAI_COMPATIBLE

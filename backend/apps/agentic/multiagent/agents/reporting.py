@@ -22,6 +22,13 @@ class ReportingAgent(BaseAgent):
     tools = ()
     output_schema = FinalReport
 
+    def gather(self, ctx, toolbox):
+        # Ground truth for the guardrail: which response actions really ran.
+        from apps.agentic.models import ActionProposal
+
+        proposals = ActionProposal.objects.filter(case=ctx.case).order_by("created_at")
+        return {"action_proposals": [{"action_type": p.action_type, "target": p.target, "status": p.status} for p in proposals[:20]]}
+
     def offline(self, ctx, evidence):
         f = ctx.findings
         triage = f.get("triage") or {}

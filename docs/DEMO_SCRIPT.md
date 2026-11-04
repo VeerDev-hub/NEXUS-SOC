@@ -5,8 +5,8 @@
 1. Start the stack: `scripts\start-dev.ps1` (or `docker compose up -d`).
 2. Optional fresh history: `scripts\start-dev.ps1 -Seed`.
 3. Open http://localhost:3000 in two browser windows side by side:
-   - Window A: **responder** (Ananya Iyer, Tier-2)
-   - Window B: **manager** (Priya Sharma, SOC Manager)
+   - Window A: **responder** (Rudra, Tier-2)
+   - Window B: **manager** (Manish Bhargav, SOC Manager)
 4. Check the header pill: `Offline engine` or `DeepSeek · deepseek-chat`. Both work. If the Wi-Fi
    is unreliable, set **Admin → Platform settings → Offline engine** before you start.
 

@@ -8,6 +8,7 @@ A rule matches single events and can additionally require
 ``match`` returns a dict of extracted fields (the event matched) or ``None``.
 """
 
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from typing import Callable
@@ -294,6 +295,27 @@ WEB_RULES = [
 # Windows Event Log rules
 # ---------------------------------------------------------------------------
 
+_DEFENDER_EXCLUSION = re.compile(r"\\Windows Defender\\Exclusions\\(?:Paths|Extensions|Processes|IpAddresses)\\", re.I)
+_SECURITY_SERVICES = {"windefend", "wdnissvc", "sense", "eventlog", "mpssvc", "wscsvc", "securityhealthservice"}
+
+
+def _is_public_ip(value):
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return ip.is_global
+
+
+def _security_service_disabled(event, values):
+    data = event.fields.get("data") or {}
+    # 7040 params: 1 display name, 2 old start type, 3 new start type, 4 service key name.
+    if data.get("param4", "").lower() not in _SECURITY_SERVICES or data.get("param3", "").lower() != "disabled":
+        return False
+    values["service"] = data.get("param1") or data.get("param4")
+    return True
+
+
 _ADMIN_GROUP = re.compile(r"admin|domain admins|enterprise admins|schema admins|remote desktop users|backup operators", re.I)
 
 
@@ -347,7 +369,7 @@ WINDOWS_RULES = [
     ),
     Rule(
         id="windows.admin_group_add",
-        title="Account added to privileged group {target_user} on {host}",
+        title="Account {member} added to privileged group {target_user} on {host}",
         description="A member was added to an administrative security group (4728/4732/4756).",
         severity=Severity.HIGH,
         tactic=AlertTactic.PRIVILEGE_ESCALATION,
@@ -406,6 +428,131 @@ WINDOWS_RULES = [
         group_by=("host", "threat"),
         tags=("windows", "malware"),
     ),
+    # ---- account manipulation (Security log, "User Account Management" auditing) ----
+    Rule(
+        id="windows.account_enabled",
+        title="Windows account {target_user} enabled on {host}",
+        description="A disabled account was re-enabled (4722). Attackers revive dormant accounts to avoid creating new ones.",
+        severity=Severity.MEDIUM,
+        tactic=AlertTactic.PERSISTENCE,
+        technique="T1098 - Account Manipulation",
+        category=ProductCategory.EDR,
+        match=windows_event(4722),
+        group_by=("host", "target_user"),
+        tags=("windows", "account-manipulation"),
+    ),
+    Rule(
+        id="windows.password_reset_by_other",
+        title="Password of {target_user} reset by {actor_user} on {host}",
+        description="One account reset another account's password (4724), a way to take over an account.",
+        severity=Severity.MEDIUM,
+        tactic=AlertTactic.PERSISTENCE,
+        technique="T1098 - Account Manipulation",
+        category=ProductCategory.EDR,
+        match=windows_event(4724, when=lambda e, v: v.get("actor_user", "").lower() != v.get("target_user", "").lower()),
+        group_by=("host", "target_user"),
+        tags=("windows", "account-manipulation"),
+    ),
+    Rule(
+        id="windows.account_lockout",
+        title="Account {target_user} locked out on {host}",
+        description="Too many bad passwords locked an account (4740): password guessing or spraying.",
+        severity=Severity.MEDIUM,
+        tactic=AlertTactic.CREDENTIAL_ACCESS,
+        technique="T1110 - Brute Force",
+        category=ProductCategory.EDR,
+        match=windows_event(4740),
+        group_by=("host", "target_user"),
+        tags=("windows", "brute-force"),
+    ),
+    Rule(
+        id="windows.user_deleted",
+        title="Windows account {target_user} deleted on {host}",
+        description="A local or domain account was deleted (4726): clean-up after an intrusion or sabotage.",
+        severity=Severity.LOW,
+        tactic=AlertTactic.IMPACT,
+        technique="T1531 - Account Access Removal",
+        category=ProductCategory.EDR,
+        match=windows_event(4726),
+        group_by=("host", "target_user"),
+        tags=("windows", "account-deleted"),
+    ),
+    Rule(
+        id="windows.rdp_logon_external",
+        title="RDP logon for {target_user} from public IP {src_ip} on {host}",
+        description="A Remote Desktop logon (4624, type 10) came from a public internet address.",
+        severity=Severity.MEDIUM,
+        tactic=AlertTactic.LATERAL_MOVEMENT,
+        technique="T1021.001 - Remote Desktop Protocol",
+        category=ProductCategory.EDR,
+        match=windows_event(4624, when=lambda e, v: v.get("logon_type") == "10" and _is_public_ip(v.get("src_ip", ""))),
+        group_by=("host", "src_ip", "target_user"),
+        tags=("windows", "rdp"),
+    ),
+    # ---- defence evasion ----------------------------------------------------------
+    Rule(
+        id="windows.audit_policy_changed",
+        title="Audit policy changed on {host} by {actor_user}",
+        description="The system audit policy was changed (4719). Attackers turn auditing off to hide their tracks.",
+        severity=Severity.HIGH,
+        tactic=AlertTactic.DEFENSE_EVASION,
+        technique="T1562.002 - Disable Windows Event Logging",
+        category=ProductCategory.EDR,
+        match=windows_event(4719),
+        group_by=("host",),
+        tags=("windows", "defense-evasion"),
+    ),
+    Rule(
+        id="windows.defender_realtime_disabled",
+        title="Microsoft Defender real-time protection disabled on {host}",
+        description="Defender reported that real-time protection was turned off (5001).",
+        severity=Severity.HIGH,
+        tactic=AlertTactic.DEFENSE_EVASION,
+        technique="T1562.001 - Disable or Modify Tools",
+        category=ProductCategory.EDR,
+        match=windows_event(5001),
+        group_by=("host",),
+        tags=("windows", "defender", "defense-evasion"),
+    ),
+    Rule(
+        id="windows.defender_exclusion_added",
+        title="Microsoft Defender exclusion added on {host}",
+        description="A path, extension, process or IP was excluded from Defender scanning (5007). Malware adds exclusions so it is never scanned.",
+        severity=Severity.HIGH,
+        tactic=AlertTactic.DEFENSE_EVASION,
+        technique="T1562.001 - Disable or Modify Tools",
+        category=ProductCategory.EDR,
+        match=windows_event(5007, when=lambda e, v: bool(_DEFENDER_EXCLUSION.search(v.get("new_value", "")))),
+        group_by=("host", "new_value"),
+        tags=("windows", "defender", "defense-evasion"),
+    ),
+    Rule(
+        id="windows.defender_tamper_blocked",
+        title="Tampering with Microsoft Defender blocked on {host}",
+        description="Tamper Protection blocked an attempt to change Defender settings (5013).",
+        severity=Severity.HIGH,
+        tactic=AlertTactic.DEFENSE_EVASION,
+        technique="T1562.001 - Disable or Modify Tools",
+        category=ProductCategory.EDR,
+        match=windows_event(5013),
+        group_by=("host",),
+        tags=("windows", "defender", "defense-evasion"),
+    ),
+    Rule(
+        id="windows.security_service_disabled",
+        title="Security service {service} set to disabled on {host}",
+        description="The start type of a security service (Defender, Event Log, Firewall, Security Center) was changed to disabled (7040).",
+        severity=Severity.HIGH,
+        tactic=AlertTactic.DEFENSE_EVASION,
+        technique="T1562.001 - Disable or Modify Tools",
+        category=ProductCategory.EDR,
+        match=windows_event(7040, when=_security_service_disabled),
+        group_by=("host", "service"),
+        tags=("windows", "defense-evasion"),
+    ),
+    # PowerShell's own "suspicious" 4104 warnings were evaluated on a real workstation and
+    # dropped: 100% of 28 hits in 7 weeks were benign tooling (VS Code, cdxml modules,
+    # vendor updaters). The command rules below inspect 4104 script text instead.
 ]
 
 

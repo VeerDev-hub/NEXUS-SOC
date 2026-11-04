@@ -12,11 +12,11 @@ import type { User } from "@/lib/types";
 const DEMO_PASSWORD = "SocDemo@2026";
 
 const DEMO = [
-  { username: "analyst", name: "Rohan Verma", role: "Tier-1 Analyst", icon: Crosshair, blurb: "Alert queue and AI triage review" },
-  { username: "responder", name: "Ananya Iyer", role: "Tier-2 Responder", icon: ShieldCheck, blurb: "Investigations and approvals" },
-  { username: "manager", name: "Priya Sharma", role: "SOC Manager", icon: Users, blurb: "KPIs, workload, critical approvals" },
+  { username: "analyst", name: "Anchal", role: "Tier-1 Analyst", icon: Crosshair, blurb: "Alert queue and AI triage review" },
+  { username: "responder", name: "Rudra", role: "Tier-2 Responder", icon: ShieldCheck, blurb: "Investigations and approvals" },
+  { username: "manager", name: "Manish Bhargav", role: "SOC Manager", icon: Users, blurb: "KPIs, workload, critical approvals" },
   { username: "auditor", name: "Vikram Nair", role: "Auditor", icon: ClipboardCheck, blurb: "Read-only decision trail" },
-  { username: "admin", name: "Aarav Mehta", role: "SOC Admin", icon: UserCog, blurb: "Users, LLM providers, integrations" },
+  { username: "admin", name: "Veer Pratap Singh", role: "SOC Admin", icon: UserCog, blurb: "Users, LLM providers, integrations" },
 ];
 
 const AGENTS = ["Supervisor", "Triage", "Threat Intel", "Asset Context", "Investigation", "Response", "Reporting"];

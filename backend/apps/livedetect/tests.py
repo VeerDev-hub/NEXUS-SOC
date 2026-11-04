@@ -5,6 +5,7 @@ import threading
 import time
 from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
@@ -57,6 +58,14 @@ WIN_1102 = """<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/even
 <Channel>Security</Channel><Computer>WIN-DC01</Computer></System>
 <UserData><LogFileCleared><SubjectUserName>eviladmin</SubjectUserName></LogFileCleared></UserData></Event>"""
 
+WIN_4732 = """<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>
+<Provider Name='Microsoft-Windows-Security-Auditing'/><EventID>4732</EventID>
+<TimeCreated SystemTime='2026-11-04T15:43:35.000Z'/><EventRecordID>3463705</EventRecordID>
+<Channel>Security</Channel><Computer>DESKTOP-1</Computer></System>
+<EventData><Data Name='MemberName'>-</Data><Data Name='MemberSid'>{sid}</Data>
+<Data Name='TargetUserName'>Administrators</Data><Data Name='TargetDomainName'>Builtin</Data>
+<Data Name='SubjectUserName'>Veer</Data></EventData></Event>"""
+
 
 class ParserTests(SimpleTestCase):
     def test_rfc3164(self):
@@ -80,6 +89,14 @@ class ParserTests(SimpleTestCase):
         self.assertEqual(event.fields["src_ip"], "203.0.113.9")
         self.assertIn("UNION SELECT", event.fields["decoded_url"])
 
+    def test_access_log_over_syslog(self):
+        event = parse_syslog_line('<190>Nov  4 10:00:00 web-01 nginx: 203.0.113.9 - - [04/Nov/2026:10:00:00 +0000] "GET /../../etc/passwd HTTP/1.1" 404 0 "-" "curl/8"')
+        self.assertEqual((event.program, event.host, event.source), ("http", "web-01", "syslog"))
+        self.assertEqual((event.fields["src_ip"], event.fields["status"]), ("203.0.113.9", 404))
+        self.assertTrue(event.raw.startswith("<190>"))
+        plain = parse_syslog_line("<13>Nov  4 10:00:00 web-01 nginx: worker process 42 exited")
+        self.assertEqual(plain.program, "nginx")
+
     def test_json_line(self):
         event = parse_file_line('{"@timestamp":"2026-11-03T10:00:00Z","host":{"name":"app-1"},"message":"user login","source":{"ip":"9.9.9.9"}}')
         self.assertEqual((event.host, event.fields["src_ip"]), ("app-1", "9.9.9.9"))
@@ -90,6 +107,17 @@ class ParserTests(SimpleTestCase):
         self.assertEqual(event.fields["src_ip"], "198.51.100.23")
         self.assertEqual(event.fields["target_user"], "Administrator")
         self.assertEqual(event.fields["record_id"], "7")
+
+    def test_local_group_add_resolves_member_sid(self):
+        xml = WIN_4732.format(sid="S-1-5-21-1-2-3-1006")
+        with mock.patch("apps.livedetect.events.resolve_sid", return_value="DESKTOP-1\\nexus_test"):
+            event = parse_windows_event_xml(xml)
+        self.assertEqual(event.fields["member"], "DESKTOP-1\\nexus_test")
+        self.assertEqual(event.fields["actor_user"], "Veer")
+        with mock.patch("apps.livedetect.events.resolve_sid", return_value=""):
+            self.assertEqual(parse_windows_event_xml(xml).fields["member"], "S-1-5-21-1-2-3-1006")
+        detection = DetectionEngine().process(event)[0]
+        self.assertEqual(detection.title, "Account DESKTOP-1\\nexus_test added to privileged group Administrators on DESKTOP-1")
 
     def test_garbage_is_kept_as_message(self):
         event = parse_syslog_line("something odd happened")
@@ -282,3 +310,49 @@ class SourceTests(SimpleTestCase):
                 source.join(timeout=3)
         self.assertEqual([e.message for e in first], ["first", "second"])
         self.assertEqual([e.message for e in second], ["after truncate"])
+
+
+def _win_event(event_id, data, *, channel="Security", provider="Microsoft-Windows-Security-Auditing", rid=1):
+    items = "".join(f"<Data Name='{k}'>{v}</Data>" for k, v in data.items())
+    return parse_windows_event_xml(
+        "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>"
+        f"<Provider Name='{provider}'/><EventID>{event_id}</EventID><Level>4</Level>"
+        f"<TimeCreated SystemTime='2026-11-04T16:00:00.000Z'/><EventRecordID>{rid}</EventRecordID>"
+        f"<Channel>{channel}</Channel><Computer>DESKTOP-1</Computer></System><EventData>{items}</EventData></Event>"
+    )
+
+
+class NewWindowsRuleTests(SimpleTestCase):
+    def _fired(self, event):
+        return [d.rule.id for d in DetectionEngine(emit=lambda d: None).process(event)]
+
+    def test_account_rules(self):
+        self.assertEqual(self._fired(_win_event(4722, {"TargetUserName": "guest", "SubjectUserName": "bob"})), ["windows.account_enabled"])
+        self.assertEqual(self._fired(_win_event(4724, {"TargetUserName": "alice", "SubjectUserName": "bob"})), ["windows.password_reset_by_other"])
+        self.assertEqual(self._fired(_win_event(4724, {"TargetUserName": "bob", "SubjectUserName": "bob"})), [])
+        self.assertEqual(self._fired(_win_event(4740, {"TargetUserName": "alice"})), ["windows.account_lockout"])
+        self.assertEqual(self._fired(_win_event(4726, {"TargetUserName": "nexus_test"})), ["windows.user_deleted"])
+        self.assertEqual(self._fired(_win_event(4719, {"SubjectUserName": "bob"})), ["windows.audit_policy_changed"])
+
+    def test_rdp_only_alerts_for_public_sources(self):
+        public = _win_event(4624, {"TargetUserName": "admin", "LogonType": "10", "IpAddress": "185.220.101.7"})
+        private = _win_event(4624, {"TargetUserName": "admin", "LogonType": "10", "IpAddress": "192.168.1.20"}, rid=2)
+        self.assertEqual(self._fired(public), ["windows.rdp_logon_external"])
+        self.assertEqual(self._fired(private), [])
+
+    def test_defender_rules(self):
+        defender = {"channel": "Microsoft-Windows-Windows Defender/Operational", "provider": "Microsoft-Windows-Windows Defender"}
+        exclusion = _win_event(5007, {"New Value": "HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths\C:\Temp = 0x0"}, **defender)
+        feature_flag = _win_event(5007, {"New Value": "HKLM\SOFTWARE\Microsoft\Windows Defender\Features\EcsConfigs\MpFC_Nis_WdFilterProcessExclusions = 0x1"}, rid=2, **defender)
+        self.assertEqual(self._fired(exclusion), ["windows.defender_exclusion_added"])
+        self.assertEqual(self._fired(feature_flag), [])
+        self.assertEqual(self._fired(_win_event(5001, {}, rid=3, **defender)), ["windows.defender_realtime_disabled"])
+        self.assertEqual(self._fired(_win_event(5013, {}, rid=4, **defender)), ["windows.defender_tamper_blocked"])
+
+    def test_security_service_disabled(self):
+        system = {"channel": "System", "provider": "Service Control Manager"}
+        disabled = _win_event(7040, {"param1": "Windows Event Log", "param2": "auto start", "param3": "disabled", "param4": "EventLog"}, **system)
+        other = _win_event(7040, {"param1": "Print Spooler", "param2": "auto start", "param3": "disabled", "param4": "Spooler"}, rid=2, **system)
+        enabled = _win_event(7040, {"param1": "Windows Event Log", "param2": "disabled", "param3": "auto start", "param4": "EventLog"}, rid=3, **system)
+        self.assertEqual(self._fired(disabled), ["windows.security_service_disabled"])
+        self.assertEqual(self._fired(other) + self._fired(enabled), [])

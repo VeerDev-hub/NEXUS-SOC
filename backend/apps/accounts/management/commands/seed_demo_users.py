@@ -6,10 +6,10 @@ from apps.accounts.rbac import Role
 DEMO_PASSWORD = "SocDemo@2026"
 
 DEMO_USERS = [
-    ("admin", Role.ADMIN, "Aarav", "Mehta", "SOC Platform Administrator"),
-    ("manager", Role.SOC_MANAGER, "Priya", "Sharma", "SOC Manager"),
-    ("analyst", Role.TIER1_ANALYST, "Rohan", "Verma", "Tier-1 Security Analyst"),
-    ("responder", Role.TIER2_RESPONDER, "Ananya", "Iyer", "Tier-2 Incident Responder"),
+    ("admin", Role.ADMIN, "Veer Pratap", "Singh", "SOC Platform Administrator"),
+    ("manager", Role.SOC_MANAGER, "Manish", "Bhargav", "SOC Manager"),
+    ("analyst", Role.TIER1_ANALYST, "Anchal", "", "Tier-1 Security Analyst"),
+    ("responder", Role.TIER2_RESPONDER, "Rudra", "", "Tier-2 Incident Responder"),
     ("auditor", Role.AUDITOR, "Vikram", "Nair", "Security Compliance Auditor"),
 ]
 

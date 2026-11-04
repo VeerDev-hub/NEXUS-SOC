@@ -1,11 +1,8 @@
-from django.utils import timezone
-
 from apps.agentic.multiagent.orchestrator import run_agents_for_case
-from apps.agentic.models import AgenticJobStatus, CaseAnalysisJob
 from apps.agentic.services.cases import (
+    claim_next_case_analysis_job,
     complete_case_analysis_job,
     fail_case_analysis_job,
-    start_case_analysis_job,
 )
 from apps.agentic.services.playbooks import (
     claim_pending_playbook_run,
@@ -32,18 +29,10 @@ def run_playbook_once(*, scripts_dir=None):
 
 
 def run_case_analysis_once():
-    job = (
-        CaseAnalysisJob.objects.filter(
-            status=AgenticJobStatus.PENDING,
-            scheduled_at__lte=timezone.now(),
-        )
-        .order_by("scheduled_at", "created_at")
-        .first()
-    )
-    if job is None:
+    running_job = claim_next_case_analysis_job()
+    if running_job is None:
         return False
 
-    running_job = start_case_analysis_job(job)
     try:
         run = run_agents_for_case(
             running_job.case,

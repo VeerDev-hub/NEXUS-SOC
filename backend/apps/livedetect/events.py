@@ -6,7 +6,9 @@ Every live source (syslog listener, file tailer, Windows Event Log reader) produ
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import datetime, timedelta
 from urllib.parse import unquote_plus
 from xml.etree import ElementTree
@@ -106,7 +108,7 @@ def parse_syslog_line(line, *, source="syslog", channel="", default_host=""):
     match = _RFC5424.match(line)
     if match:
         app = match["app"] if match["app"] != "-" else ""
-        return LogEvent(
+        return _web_access_over_syslog(LogEvent(
             source=source,
             message=match["msg"].lstrip("﻿").strip(),
             timestamp=_parse_time(match["ts"] if match["ts"] != "-" else ""),
@@ -115,12 +117,12 @@ def parse_syslog_line(line, *, source="syslog", channel="", default_host=""):
             channel=channel,
             fields={"pid": match["pid"] if match["pid"] != "-" else ""},
             raw=line,
-        )
+        ))
 
     for pattern, time_parser in ((_RFC3164, _parse_bsd_time), (_ISO_SYSLOG, _parse_time)):
         match = pattern.match(line)
         if match:
-            return LogEvent(
+            return _web_access_over_syslog(LogEvent(
                 source=source,
                 message=match["msg"].strip(),
                 timestamp=time_parser(match["ts"]),
@@ -129,7 +131,7 @@ def parse_syslog_line(line, *, source="syslog", channel="", default_host=""):
                 channel=channel,
                 fields={"pid": match["pid"] or ""},
                 raw=line,
-            )
+            ))
 
     # Unknown format: keep the whole line so keyword rules still see it.
     stripped = re.sub(r"^<\d{1,3}>", "", line).strip()
@@ -167,6 +169,19 @@ def parse_access_log_line(line, *, source="file", channel="", default_host=""):
         },
         raw=line.strip(),
     )
+
+
+def _web_access_over_syslog(event):
+    """nginx/Apache can ship access logs over syslog (``access_log syslog:server=...``).
+
+    Turn such a line into the same ``http`` event a tailed access.log produces, keeping
+    the syslog header's host so web rules see which server was attacked.
+    """
+    if not _NGINX_COMBINED.match(event.message):
+        return event
+    web = parse_access_log_line(event.message, source=event.source, channel=event.channel, default_host=event.host)
+    web.raw = event.raw
+    return web
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +269,7 @@ _WINDOWS_FIELD_MAP = {
     "TargetUserName": "target_user",
     "SubjectUserName": "actor_user",
     "MemberName": "member",
+    "MemberSid": "member_sid",
     "CommandLine": "command",
     "NewProcessName": "process",
     "ScriptBlockText": "command",
@@ -263,8 +279,34 @@ _WINDOWS_FIELD_MAP = {
     "LogonType": "logon_type",
     "WorkstationName": "workstation",
     "Threat Name": "threat",
+    "Severity Name": "threat_severity",
+    "Process Name": "process",
+    "Detection User": "actor_user",
+    "New Value": "new_value",
     "Path": "file_path",
 }
+
+
+@lru_cache(maxsize=1024)
+def resolve_sid(sid):
+    """Return ``DOMAIN\\name`` for a Windows SID, or "" when it cannot be resolved here."""
+    if sys.platform != "win32" or not sid or not sid.startswith("S-1-"):
+        return ""
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32, kernel32 = ctypes.windll.advapi32, ctypes.windll.kernel32
+    psid = ctypes.c_void_p()
+    if not advapi32.ConvertStringSidToSidW(ctypes.c_wchar_p(sid), ctypes.byref(psid)):
+        return ""
+    try:
+        name, domain = ctypes.create_unicode_buffer(256), ctypes.create_unicode_buffer(256)
+        name_len, domain_len, use = wintypes.DWORD(256), wintypes.DWORD(256), wintypes.DWORD()
+        if not advapi32.LookupAccountSidW(None, psid, name, ctypes.byref(name_len), domain, ctypes.byref(domain_len), ctypes.byref(use)):
+            return ""
+        return f"{domain.value}\\{name.value}" if domain.value else name.value
+    finally:
+        kernel32.LocalFree(psid)
 
 
 def parse_windows_event_xml(xml_text):
@@ -301,11 +343,14 @@ def windows_event_from_element(root):
             if item.text and item.text.strip():
                 data[name if name != "Data" else f"Data{index}"] = item.text.strip()
 
-    fields = {"record_id": sys_text("EventRecordID"), "data": data}
+    fields = {"record_id": sys_text("EventRecordID"), "level": sys_text("Level"), "data": data}
     for source_name, target in _WINDOWS_FIELD_MAP.items():
         value = data.get(source_name, "")
         if value and value not in ("-", "::1", "127.0.0.1") and target not in fields:
             fields[target] = value
+    # Local-group changes (4732) log the added account only as a SID (MemberName is "-").
+    if "member" not in fields and fields.get("member_sid"):
+        fields["member"] = resolve_sid(fields["member_sid"]) or fields["member_sid"]
     if event_id == 4104:  # PowerShell script block: keep the script as the command
         fields["command"] = data.get("ScriptBlockText", "")
 

@@ -17,14 +17,17 @@ from pathlib import Path
 
 from django.conf import settings
 
+from apps.agentic.multiagent.guardrails import INJECTION_RULE
+
 PROMPT_DIR = Path(settings.BASE_DIR) / "data" / "agents"
 
-COMMON_RULES = """
+COMMON_RULES = f"""
 General rules for every agent:
 - Use only facts present in the input (case, artifacts, prior_findings, evidence). Never invent hosts, users, IPs or timestamps.
 - When evidence is weak, say so and lower your confidence instead of guessing.
 - Be concise and specific; another agent and a human analyst will read your output.
 - Respond only through the required structured output.
+{INJECTION_RULE}
 """
 
 

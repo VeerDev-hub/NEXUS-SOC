@@ -22,5 +22,6 @@ urlpatterns = [
     path("api/", include("apps.inbox.urls")),
     path("api/", include("apps.preferences.urls")),
     path("api/", include("apps.webhook.urls")),
+    path("api/", include("apps.livedetect.urls")),
     path("api/agent/v1/", include("apps.agent_api.urls")),
 ]

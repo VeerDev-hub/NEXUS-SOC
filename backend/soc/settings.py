@@ -110,6 +110,12 @@ ASGI_APPLICATION = "soc.asgi.application"
 
 # Pause per offline agent step (ms) so live demos can follow the timeline; 0 disables.
 AGENT_OFFLINE_STEP_DELAY_MS = _env_int("AGENT_OFFLINE_STEP_DELAY_MS", 700, minimum=0)
+# ---- LLM guardrails (apps/agentic/multiagent/guardrails.py); 0 disables a limit --------
+# Token budgets apply to paid providers only; local Ollama is never limited.
+AGENT_RUN_TOKEN_BUDGET = _env_int("AGENT_RUN_TOKEN_BUDGET", 100_000, minimum=0)
+AGENT_DAILY_TOKEN_BUDGET = _env_int("AGENT_DAILY_TOKEN_BUDGET", 1_500_000, minimum=0)
+AGENT_LLM_MAX_OUTPUT_TOKENS = _env_int("AGENT_LLM_MAX_OUTPUT_TOKENS", 4096, minimum=0)
+AGENT_MAX_FIELD_CHARS = _env_int("AGENT_MAX_FIELD_CHARS", 4000, minimum=200)
 
 
 def _env_list(name, default=""):
@@ -143,6 +149,17 @@ LIVE_TAIL_FILES = _env_list("LIVE_TAIL_FILES")
 LIVE_WINDOWS_EVENTLOG = os.environ.get("LIVE_WINDOWS_EVENTLOG", "auto")
 LIVE_WINDOWS_CHANNELS = _env_list("LIVE_WINDOWS_CHANNELS")
 LIVE_DETECTION_COOLDOWN_SECONDS = _env_int("LIVE_DETECTION_COOLDOWN_SECONDS", 600, minimum=0)
+
+# ---- Behavioural baselines (UEBA-lite, apps/livedetect/baseline.py) -------------
+UEBA_ENABLED = _env_bool("UEBA_ENABLED", True)
+# A user/host profile is compared only once it has this many observations over this many hours.
+UEBA_MIN_OBSERVATIONS = _env_int("UEBA_MIN_OBSERVATIONS", 10, minimum=1)
+UEBA_MIN_AGE_HOURS = _env_int("UEBA_MIN_AGE_HOURS", 24, minimum=0)
+UEBA_MIN_PROCESS_EVENTS = _env_int("UEBA_MIN_PROCESS_EVENTS", 200, minimum=1)
+UEBA_RARE_HOUR_RATIO = float(os.environ.get("UEBA_RARE_HOUR_RATIO", "0.03"))
+UEBA_MIN_ALERT_SCORE = _env_int("UEBA_MIN_ALERT_SCORE", 30, minimum=0)
+UEBA_RISK_HALF_LIFE_HOURS = _env_int("UEBA_RISK_HALF_LIFE_HOURS", 24, minimum=1)
+UEBA_PROCESS_ALERTS_PER_HOUR = _env_int("UEBA_PROCESS_ALERTS_PER_HOUR", 5, minimum=0)
 
 USE_TZ = True
 TIME_ZONE = os.environ.get("DJANGO_TIME_ZONE", "Asia/Kolkata")

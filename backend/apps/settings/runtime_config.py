@@ -1,6 +1,16 @@
 from functools import lru_cache
 
 
+def _env_api_key(provider):
+    """A provider saved without a key uses its environment variable (keeps secrets out of the DB)."""
+    import os
+
+    from integrations.llm.providers import get_provider_spec
+
+    env_name = get_provider_spec(provider).api_key_env
+    return os.environ.get(env_name, "").strip() if env_name else ""
+
+
 @lru_cache(maxsize=1)
 def get_llm_configs():
     """Enabled providers from the database, falling back to *_API_KEY env vars."""
@@ -12,7 +22,7 @@ def get_llm_configs():
         {
             "name": provider.name,
             "provider": provider.provider,
-            "api_key": provider.api_key,
+            "api_key": provider.api_key or _env_api_key(provider.provider),
             "base_url": provider.base_url.rstrip("/"),
             "model": provider.model,
             "proxy": provider.proxy,

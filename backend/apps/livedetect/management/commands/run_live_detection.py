@@ -8,6 +8,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import close_old_connections
 
+from apps.livedetect.baseline import BaselineEngine
 from apps.livedetect.engine import DetectionEngine
 from apps.livedetect.rules import RULES
 from apps.livedetect.sources import (
@@ -39,6 +40,8 @@ class Command(BaseCommand):
         parser.add_argument("--windows-channels", default=",".join(settings.LIVE_WINDOWS_CHANNELS or DEFAULT_WINDOWS_CHANNELS), help="Comma-separated Windows log names.")
         parser.add_argument("--from-start", action="store_true", help="Process existing file/event log content instead of only new entries.")
         parser.add_argument("--cooldown", type=int, default=settings.LIVE_DETECTION_COOLDOWN_SECONDS, help="Seconds before the same rule+key may alert again.")
+        parser.add_argument("--no-baseline", action="store_true", help="Disable behavioural baselines (UEBA) for this run.")
+        parser.add_argument("--learn-only", action="store_true", help="Update behavioural baselines without raising baseline alerts (signature rules still alert).")
         parser.add_argument("--list-rules", action="store_true", help="Print the detection rules and exit.")
 
     def handle(self, *args, **options):
@@ -71,8 +74,14 @@ class Command(BaseCommand):
         if not sources:
             raise CommandError("No live sources enabled. Use --syslog-port, --tail or --windows on.")
 
-        engine = DetectionEngine(cooldown_seconds=options["cooldown"])
+        baseline = None
+        if settings.UEBA_ENABLED and not options["no_baseline"]:
+            baseline = BaselineEngine(learn_only=options["learn_only"])
+        engine = DetectionEngine(cooldown_seconds=options["cooldown"], baseline=baseline)
         self.stdout.write(self.style.SUCCESS(f"NEXUS-SOC live detection started with {len(engine.rules)} rules:"))
+        if baseline is not None:
+            mode = "learning only" if baseline.learn_only else "learning + alerting"
+            self.stdout.write(f"  - Behavioural baselines ({mode}; a profile is compared after {baseline.min_observations} observations over {baseline.min_age})")
         for source in sources:
             self.stdout.write(f"  - {source.description}")
             source.start()
@@ -84,7 +93,7 @@ class Command(BaseCommand):
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, _stop)
 
-        last_report = time.monotonic()
+        last_report = last_flush = time.monotonic()
         while not stop.is_set():
             try:
                 event = events.get(timeout=1)
@@ -95,10 +104,17 @@ class Command(BaseCommand):
                 close_old_connections()
                 for detection in engine.process(event):
                     self.stdout.write(self.style.WARNING(f"[{detection.rule.severity}] {detection.title}  ({detection.rule.id})"))
+            if baseline is not None and time.monotonic() - last_flush > 30:
+                last_flush = time.monotonic()
+                close_old_connections()
+                baseline.flush()
             if time.monotonic() - last_report > 60:
                 last_report = time.monotonic()
                 logger.info("Live detection: %s events processed, %s detections", engine.stats["events"], engine.stats["detections"])
 
         self.stdout.write("Stopping live detection...")
+        if baseline is not None:
+            close_old_connections()
+            self.stdout.write(f"Saved {baseline.flush()} behavioural profile(s).")
         for source in sources:
             source.join(timeout=3)

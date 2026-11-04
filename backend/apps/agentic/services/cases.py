@@ -49,6 +49,24 @@ def request_case_analysis(*, case, trigger, scheduled_at=None, requested_by=None
 
 
 @transaction.atomic
+def claim_next_case_analysis_job():
+    """Atomically take the oldest due job; safe with several workers running in parallel."""
+    job = (
+        CaseAnalysisJob.objects.select_for_update(skip_locked=True)
+        .filter(status=AgenticJobStatus.PENDING, scheduled_at__lte=timezone.now())
+        .order_by("scheduled_at", "created_at")
+        .first()
+    )
+    if job is None:
+        return None
+    job.status = AgenticJobStatus.RUNNING
+    job.started_at = timezone.now()
+    job.error = ""
+    job.save(update_fields=["status", "started_at", "error", "updated_at"])
+    return job
+
+
+@transaction.atomic
 def start_case_analysis_job(job):
     locked = CaseAnalysisJob.objects.select_for_update().get(pk=job.pk)
     if locked.status != AgenticJobStatus.PENDING:

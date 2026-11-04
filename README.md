@@ -102,11 +102,11 @@ Open **http://localhost:3000** and sign in as one of the demo personas
 
 | Username | Persona | Role |
 |---|---|---|
-| `analyst` | Rohan Verma | Tier-1 Analyst |
-| `responder` | Ananya Iyer | Tier-2 Incident Responder |
-| `manager` | Priya Sharma | SOC Manager |
+| `analyst` | Anchal | Tier-1 Analyst |
+| `responder` | Rudra | Tier-2 Incident Responder |
+| `manager` | Manish Bhargav | SOC Manager |
 | `auditor` | Vikram Nair | Auditor |
-| `admin` | Aarav Mehta | SOC Admin |
+| `admin` | Veer Pratap Singh | SOC Admin |
 
 On first start the stack seeds **two weeks of realistic history**: about 50 cases processed by
 the agent team and worked by analysts. Use **Launch attack scenario** to generate a live incident.

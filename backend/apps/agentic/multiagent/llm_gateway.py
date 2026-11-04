@@ -19,8 +19,10 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from django.conf import settings
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from apps.agentic.multiagent import guardrails
 from apps.settings.runtime_config import get_llm_configs, get_runtime_config
 from integrations.llm.llmapi import LLMAPI, provider_key, structured_method
 from integrations.llm.providers import get_provider_spec
@@ -36,6 +38,26 @@ PROBE_TIMEOUT_SECONDS = 2.5
 
 _probe_lock = threading.Lock()
 _probe_cache = {}
+
+# Circuit breaker: a provider that reported "no credits" or rejected its API key is skipped for a while
+# instead of costing a failed round trip on every agent call.
+CIRCUIT_OPEN_SECONDS = 120
+_circuit = {}
+
+
+def _trip(label, reason):
+    _circuit[label] = (time.monotonic() + CIRCUIT_OPEN_SECONDS, reason)
+
+
+def _tripped(label):
+    entry = _circuit.get(label)
+    if not entry:
+        return ""
+    until, reason = entry
+    if time.monotonic() >= until:
+        _circuit.pop(label, None)
+        return ""
+    return f"{reason}; paused for {int(until - time.monotonic())} s"
 
 
 class LLMUnavailable(RuntimeError):
@@ -132,9 +154,35 @@ def _usage(raw_message):
 
 
 class LLMGateway:
-    def __init__(self, *, mode=None, configs=None):
+    def __init__(self, *, mode=None, configs=None, guard=None):
         self.mode = mode or _configured_mode()
         self.configs = get_llm_configs() if configs is None else configs
+        self.guard = guard  # guardrails.RunGuardrails for the current run (optional)
+        self.run_tokens = 0
+
+    def _record(self, kind, agent_key, detail):
+        if self.guard is not None:
+            self.guard.record(kind, agent_key, detail)
+
+    def _candidates(self, agent_key):
+        """The agent's preferred provider first, then the others in priority order (fail-over)."""
+        first = _select_config(self.configs, agent_key)
+        return [first] + [c for c in self.configs if c is not first]
+
+    def _budget_block(self, config, spec):
+        """Return a reason when the budget forbids calling this (paid) provider, else ''."""
+        if guardrails.is_local_provider(config, spec):
+            return ""
+        run_limit = int(getattr(settings, "AGENT_RUN_TOKEN_BUDGET", 0) or 0)
+        if run_limit and self.run_tokens >= run_limit:
+            return f"run token budget reached ({self.run_tokens}/{run_limit})"
+        day_limit = int(getattr(settings, "AGENT_DAILY_TOKEN_BUDGET", 0) or 0)
+        if day_limit:
+            local_names = [c.get("name") for c in self.configs if guardrails.is_local_provider(c, get_provider_spec(provider_key(c)))]
+            used = guardrails.paid_tokens_today(local_names)
+            if used >= day_limit:
+                return f"daily paid-token budget reached ({used}/{day_limit})"
+        return ""
 
     def invoke(self, *, agent_key, system_prompt, payload, schema, offline_fn):
         if self.mode == MODE_OFFLINE:
@@ -144,39 +192,61 @@ class LLMGateway:
                 raise LLMUnavailable("No LLM provider configured.")
             return self._offline(offline_fn, "No LLM provider configured.")
 
-        config = _select_config(self.configs, agent_key)
-        spec = get_provider_spec(provider_key(config))
-        base_url = config.get("base_url") or spec.default_base_url
-        if self.mode == MODE_AUTO:
-            reachable, detail = probe_endpoint(base_url)
-            if not reachable:
-                return self._offline(offline_fn, f"Provider unreachable: {detail}")
+        payload = guardrails.prepare_payload(payload, guard=self.guard, agent_key=agent_key)
+        problems, last_exc = [], None
+        for config in self._candidates(agent_key):
+            spec = get_provider_spec(provider_key(config))
+            label = config.get("name") or spec.label
+            blocked = self._budget_block(config, spec) or _tripped(label)
+            if blocked:
+                problems.append(f"{label}: {blocked}")
+                self._record("budget", agent_key, f"Skipped {label}: {blocked}.")
+                continue
+            if self.mode == MODE_AUTO:
+                reachable, detail = probe_endpoint(config.get("base_url") or spec.default_base_url)
+                if not reachable:
+                    problems.append(f"{label}: unreachable ({detail})")
+                    continue
+            started = time.monotonic()
+            try:
+                output, tokens_in, tokens_out = self._call(config, system_prompt, payload, schema)
+            except Exception as exc:
+                logger.warning("LLM call failed for agent=%s provider=%s: %s", agent_key, label, exc)
+                problems.append(f"{label}: {type(exc).__name__}: {str(exc)[:200]}")
+                last_exc = exc
+                status = getattr(exc, "status_code", None)
+                if status == 402:
+                    _trip(label, "out of credits (HTTP 402)")
+                elif status in (401, 403):
+                    _trip(label, f"API key rejected (HTTP {status})")
+                continue
+            self.run_tokens += tokens_in + tokens_out
+            if problems:
+                self._record("failover", agent_key, f"Used {label} after: " + "; ".join(problems))
+            return LLMResult(
+                output=output,
+                mode=MODE_ONLINE,
+                provider=label,
+                model=config.get("model") or spec.default_model,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                fallback_reason="; ".join(problems)[:500],
+            )
 
-        started = time.monotonic()
-        try:
-            output, tokens_in, tokens_out = self._call(config, system_prompt, payload, schema)
-        except Exception as exc:
-            logger.warning("LLM call failed for agent=%s provider=%s: %s", agent_key, config.get("name"), exc)
-            if self.mode == MODE_ONLINE:
-                raise
-            return self._offline(offline_fn, f"{type(exc).__name__}: {str(exc)[:300]}")
-
-        return LLMResult(
-            output=output,
-            mode=MODE_ONLINE,
-            provider=config.get("name") or spec.label,
-            model=config.get("model") or spec.default_model,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            latency_ms=int((time.monotonic() - started) * 1000),
-        )
+        if self.mode == MODE_ONLINE:
+            if last_exc is not None:
+                raise last_exc
+            raise LLMUnavailable("; ".join(problems))
+        return self._offline(offline_fn, "; ".join(problems)[:500] or "No provider available.")
 
     def _call(self, config, system_prompt, payload, schema):
-        model = LLMAPI(configs=[config]).build_model(config)
+        max_out = int(getattr(settings, "AGENT_LLM_MAX_OUTPUT_TOKENS", 0) or 0)
+        model = LLMAPI(configs=[config]).build_model(config, **({"max_tokens": max_out} if max_out else {}))
         structured = model.with_structured_output(schema, method=structured_method(config), include_raw=True)
         response = structured.invoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+            HumanMessage(content=guardrails.render_user_message(payload)),
         ])
         if response.get("parsing_error") or response.get("parsed") is None:
             raise ValueError(f"Model output did not match {schema.__name__}: {response.get('parsing_error')}")

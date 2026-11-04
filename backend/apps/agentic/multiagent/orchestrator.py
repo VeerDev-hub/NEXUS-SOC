@@ -11,6 +11,7 @@ from apps.agentic.models import AgentRun, AgentRunStatus, AgentStep, AgentStepSt
 from apps.agentic.multiagent import events
 from apps.agentic.multiagent.agents import get_agent
 from apps.agentic.multiagent.context import CaseContext
+from apps.agentic.multiagent.guardrails import RunGuardrails
 from apps.agentic.multiagent.llm_gateway import LLMGateway
 from apps.agentic.multiagent.schemas import FINISH
 from apps.agentic.multiagent.supervisor import Supervisor
@@ -86,8 +87,11 @@ class Orchestrator:
             user_input=user_input or "",
         )
         events.run_event("agent.run.started", run)
+        self.guard = RunGuardrails()
+        self.gateway.guard = self.guard
         try:
             ctx = CaseContext.build(case, user_input=user_input)
+            self.guard.inspect_case(ctx)
             toolbox = Toolbox(case)
             steps_taken = 0
             while steps_taken < self.max_steps:
@@ -122,9 +126,10 @@ class Orchestrator:
         agent = get_agent(routing.next_agent)
         step = self._new_step(run, agent.key, routing.reasoning)
         toolbox.reset()
+        events_before = len(self.guard.events)
         try:
             outcome = agent.run(ctx, toolbox, self.gateway)
-            output = outcome.output
+            output = self._apply_output_guardrails(agent.key, ctx, outcome)
             ctx.findings[agent.key] = output.model_dump(mode="json")
             side_effects = agent.apply(ctx, output, run=run, step=step)
             if side_effects:
@@ -135,7 +140,7 @@ class Orchestrator:
                 llm=outcome.llm,
                 status=AgentStepStatus.COMPLETED,
                 summary=agent.summarize(output),
-                output=ctx.findings[agent.key],
+                output={**ctx.findings[agent.key], **({"_guardrails": g} if (g := self.guard.drain(events_before)) else {})},
                 tool_calls=toolbox.reset(),
                 confidence=agent.confidence(output),
             )
@@ -145,13 +150,31 @@ class Orchestrator:
             # Mark as done so the Supervisor does not loop on a broken agent.
             ctx.findings.setdefault(agent.key, {"summary": f"{agent.name} failed: {exc}"})
 
+    def _apply_output_guardrails(self, agent_key, ctx, outcome):
+        output = outcome.output
+        self.guard.observe(outcome.evidence)
+        if agent_key == "response":
+            output.actions = self.guard.filter_actions(agent_key, output.actions)
+        elif agent_key == "reporting":
+            from apps.agentic.models import ActionProposal, ActionProposalStatus
+
+            executed = set(
+                ActionProposal.objects.filter(case=ctx.case, status=ActionProposalStatus.EXECUTED).values_list("action_type", flat=True)
+            )
+            output.ioc_indicators = self.guard.filter_iocs(agent_key, output.ioc_indicators)
+            output.executive_summary = self.guard.check_action_claims(agent_key, output.executive_summary, executed)
+            output.verdict = self.guard.floor_verdict(output.verdict)
+        return output
+
     def _complete(self, run, ctx):
         report = ctx.findings.get("reporting") or {}
         triage = ctx.findings.get("triage") or {}
         investigation = ctx.findings.get("investigation") or {}
         run.status = AgentRunStatus.COMPLETED
         run.report = report
-        run.final_verdict = report.get("verdict") or investigation.get("verdict") or triage.get("verdict", "")
+        run.final_verdict = self.guard.floor_verdict(report.get("verdict") or investigation.get("verdict") or triage.get("verdict", ""))
+        if self.guard.events:
+            run.report = {**report, "guardrails": [event.as_dict() for event in self.guard.events]}
         run.final_severity = report.get("severity") or triage.get("severity", "")
         run.final_confidence = investigation.get("confidence_score") or triage.get("confidence_score")
         run.summary = report.get("executive_summary") or triage.get("summary", "")

@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -40,3 +40,4 @@ Thumbs.db
 .soc/
 
 docs/research/
+demo/reports
