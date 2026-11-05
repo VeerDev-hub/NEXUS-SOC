@@ -184,6 +184,55 @@ def vpn_bruteforce():
     return result.case
 
 
+def ssh_bruteforce():
+    """Medium-severity brute force from a known-bad IP that never got in: the agents block the IP on their own."""
+    now = timezone.now()
+    corr = f"demo-ssh-{uuid.uuid4().hex[:8]}"
+    src = "89.248.165.12"
+    attempts = random.randint(180, 420)
+    result = create_alert_with_context(
+        case_defaults={
+            "title": f"SSH brute force from {src} against the public bastion",
+            "severity": Severity.MEDIUM,
+            "impact": CaseImpact.LOW,
+            "priority": CasePriority.MEDIUM,
+            "confidence": CaseConfidence.MEDIUM,
+            "description": f"{attempts} failed SSH logins from {src} in 10 minutes. No successful login.",
+            "category": ProductCategory.NDR,
+            "tags": ["brute-force", "ssh", "internet-noise"],
+            "correlation_uid": corr,
+        },
+        alert_fields={
+            "title": f"{attempts} failed SSH logins from {src}",
+            "severity": Severity.MEDIUM,
+            "confidence": Confidence.MEDIUM,
+            "impact": Impact.LOW,
+            "disposition": Disposition.BLOCKED,
+            "action": AlertAction.DENIED,
+            "status": AlertStatus.NEW,
+            "rule_id": "NET-07-SSH-Brute-Force",
+            "rule_name": "SSH Brute Force (no success)",
+            "correlation_uid": corr,
+            "analytic_type": AlertAnalyticType.RULE,
+            "product_category": ProductCategory.NDR,
+            "product_name": "Perimeter Firewall",
+            "product_vendor": "Network Security",
+            "first_seen_time": now - timedelta(minutes=10),
+            "last_seen_time": now - timedelta(minutes=1),
+            "desc": "High-volume SSH authentication failures from a single external source; every attempt failed.",
+            "labels": ["brute-force", "credential-access"],
+            "tactic": "Credential Access",
+            "technique": "T1110.001 - Password Guessing",
+            "raw_data": {"src_ip": src, "dst_port": 22, "failures": attempts, "successes": 0},
+        },
+        artifacts=[
+            {"value": src, "type": ArtifactType.IP_ADDRESS, "role": ArtifactRole.ACTOR, "name": ArtifactName.SOURCE_IP},
+        ],
+        enrichments=[],
+    )
+    return result.case
+
+
 def authorized_scan():
     now = timezone.now()
     corr = f"demo-scan-{uuid.uuid4().hex[:8]}"
@@ -287,6 +336,7 @@ SCENARIOS = {
     "cloud_privesc": {"label": "AWS privilege escalation", "description": "CI user attaches AdministratorAccess to itself from a known-bad IP.", "expect": "True Positive · IAM revocation needs approval", "fn": cloud_privesc},
     "vpn_bruteforce": {"label": "VPN brute force", "description": "Password spraying from an external IP ends in a successful login.", "expect": "True Positive · session revoke + reset", "fn": vpn_bruteforce},
     "encoded_powershell": {"label": "Suspicious PowerShell", "description": "Outlook spawns encoded PowerShell on a finance laptop; no known-bad IOC.", "expect": "Suspicious · stays with Tier-1 to decide", "fn": encoded_powershell},
+    "ssh_bruteforce": {"label": "SSH brute force (auto-blocked)", "description": "Hundreds of failed SSH logins from a known-bad IP; nothing got in.", "expect": "True Positive · Medium · IP blocked by the agents, no approval", "fn": ssh_bruteforce},
     "authorized_scan": {"label": "Authorized scan (false positive)", "description": "Internal Nessus scanner during the approved pentest window.", "expect": "False Positive · closed fast, no actions", "fn": authorized_scan},
 }
 

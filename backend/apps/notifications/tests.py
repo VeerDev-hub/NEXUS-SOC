@@ -97,3 +97,64 @@ class NotificationTests(TestCase):
         self.assertEqual(run.final_verdict, "True Positive")
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(NotificationLog.objects.get().agent_run_id, run.pk)
+
+
+@override_settings(**EMAIL_SETTINGS)
+class TeamEmailTests(TestCase):
+    def _user(self, username, email, **kw):
+        from apps.accounts.models import User
+
+        return User.objects.create_user(username=username, email=email, password="x-Password1", **kw)
+
+    def test_alert_recipients_include_opted_in_teammates(self):
+        from apps.notifications.service import alert_recipients
+
+        self._user("alice", "alice@corp.io", email_alerts=True)
+        self._user("bob", "bob@corp.io", email_alerts=False)
+        self._user("demo", "demo@soc.demo", email_alerts=True)
+        self._user("gone", "gone@corp.io", email_alerts=True, is_active=False)
+        self._user("dup", "SOC@example.com", email_alerts=True)
+        self.assertEqual(alert_recipients(), ["soc@example.com", "lead@example.com", "alice@corp.io"])
+
+    def test_teammate_gets_high_case_alert(self):
+        self._user("alice", "alice@corp.io", email_alerts=True)
+        notify_case_verdict(fake_run(make_case(), "True Positive", "High"))
+        self.assertIn("alice@corp.io", mail.outbox[0].to)
+
+    def test_assignment_sends_email_to_assignee(self):
+        from apps.inbox.notifications import notify_case_assignment
+
+        lead = self._user("lead", "lead@corp.io")
+        alice = self._user("alice", "alice@corp.io")
+        case = make_case()
+        case.assignee = alice
+        with self.captureOnCommitCallbacks(execute=True):
+            notify_case_assignment(case, actor=lead)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ["alice@corp.io"])
+        self.assertIn("assigned to you", mail.outbox[0].subject)
+        self.assertIn("http://soc.local/cases/", mail.outbox[0].body)
+        self.assertEqual(NotificationLog.objects.filter(status=NotificationStatus.SENT).count(), 1)
+
+    def test_assignment_email_respects_opt_out_and_demo_addresses(self):
+        from apps.inbox.notifications import notify_case_assignment
+
+        case = make_case()
+        for user in (self._user("quiet", "quiet@corp.io", notify_on_case_assignment=False), self._user("demo", "demo@soc.demo")):
+            case.assignee = user
+            with self.captureOnCommitCallbacks(execute=True):
+                notify_case_assignment(case, actor=None)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_manager_assigns_via_api_and_teammate_is_emailed(self):
+        from rest_framework.test import APIClient
+
+        manager = self._user("boss", "boss@corp.io", role="soc_manager")
+        alice = self._user("alice", "alice@corp.io", role="tier1_analyst")
+        case = make_case()
+        client = APIClient()
+        client.force_authenticate(manager)
+        with self.captureOnCommitCallbacks(execute=True):
+            response = client.patch(f"/api/cases/{case.pk}/", {"assignee": alice.id}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([m.to for m in mail.outbox], [["alice@corp.io"]])

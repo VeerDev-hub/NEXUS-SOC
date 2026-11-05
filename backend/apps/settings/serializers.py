@@ -229,14 +229,8 @@ class LLMProviderConfigSerializer(serializers.ModelSerializer):
                 tags.append(tag)
         return tags
 
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-        tags = attrs.get("tags")
-        if tags is None and self.instance is not None:
-            tags = self.instance.tags
-        if not tags:
-            raise serializers.ValidationError({"tags": "Select at least one tag."})
-        return attrs
+    # Tags are optional: untagged providers serve every agent in priority order
+    # (see LLMGateway._candidates); tags only pin specific agents to a provider.
 
     def validate_proxy(self, value):
         proxy = (value or "").strip()

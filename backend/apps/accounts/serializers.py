@@ -48,6 +48,7 @@ class UserSerializer(serializers.ModelSerializer):
             "is_active",
             "notify_on_playbook_completion",
             "notify_on_case_assignment",
+            "email_alerts",
             "has_avatar",
             "avatar_url",
             "date_joined",
@@ -92,6 +93,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "title",
             "notify_on_playbook_completion",
             "notify_on_case_assignment",
+            "email_alerts",
         )
 
 
@@ -110,6 +112,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "mobile_phone",
+            "email_alerts",
+            "notify_on_case_assignment",
         )
 
     def create(self, validated_data):
@@ -139,6 +143,8 @@ class UserAdminUpdateSerializer(serializers.ModelSerializer):
             "title",
             "role",
             "is_active",
+            "email_alerts",
+            "notify_on_case_assignment",
         )
 
     def update(self, instance, validated_data):

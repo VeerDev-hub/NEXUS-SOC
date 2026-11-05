@@ -2,15 +2,18 @@
 
 import { Activity, Bot, Cpu, Gauge, WifiOff } from "lucide-react";
 import { HorizontalBars } from "@/components/charts";
+import LLMProvidersPanel from "@/components/agents/LLMProvidersPanel";
 import RunFeed from "@/components/RunFeed";
 import { Badge, Card, PageHeader, Spinner, StatTile, Table } from "@/components/ui";
 import { agentMeta, TOOL_LABEL } from "@/lib/agents";
+import { can, useAuth } from "@/lib/auth";
 import { formatDuration, formatNumber } from "@/lib/format";
 import { useAgentCatalog, useAgentMetrics } from "@/lib/queries";
 
 export default function AgentMonitor() {
   const catalog = useAgentCatalog();
   const metrics = useAgentMetrics();
+  const canManage = can(useAuth((s) => s.user), "settings.manage");
   if (catalog.isLoading || metrics.isLoading) return <Spinner />;
   const llm = catalog.data!.llm;
   const byAgent = Object.fromEntries((metrics.data?.agents ?? []).map((a) => [a.agent, a]));
@@ -38,7 +41,7 @@ export default function AgentMonitor() {
           <span className="text-ink-3">Configured mode: {llm.configured_mode}</span>
           <span className="text-ink-3">{llm.detail}</span>
         </div>
-        {llm.providers.length > 0 && (
+        {!canManage && llm.providers.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
             {llm.providers.map((p, i) => (
               <span key={p.name} className="rounded border border-line-strong bg-bg px-2 py-1 text-xs">
@@ -50,6 +53,8 @@ export default function AgentMonitor() {
           </div>
         )}
       </Card>
+
+      {canManage && <LLMProvidersPanel className="mb-5" />}
 
       <Card title="Agent roster" className="mb-5" bodyClassName="p-0">
         <Table head={["Agent", "Role", "Tools", "Steps", "Success", "Avg latency", "Avg confidence", "Offline"]}>

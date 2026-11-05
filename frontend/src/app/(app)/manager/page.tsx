@@ -2,6 +2,7 @@
 
 import { AlertOctagon, Bot, BriefcaseBusiness, Gauge, Handshake, ShieldAlert, Timer } from "lucide-react";
 import ProposalCard from "@/components/agents/ProposalCard";
+import AssignWorkPanel from "@/components/AssignWorkPanel";
 import { AlertTrendChart, HorizontalBars } from "@/components/charts";
 import LaunchScenario from "@/components/LaunchScenario";
 import RunFeed from "@/components/RunFeed";
@@ -49,6 +50,8 @@ function Overview() {
         <SocPosture />
       </div>
 
+      <AssignWorkPanel className="mb-5" />
+
       <div className="grid gap-5 xl:grid-cols-3">
         <Card title="Critical actions needing a manager">
           {critical.data?.results.length ? (
@@ -69,7 +72,7 @@ function Overview() {
             <AlertTrendChart data={d.alerts.trend} />
           </Card>
           <Card title="AI verdicts (completed runs)">{verdicts.length ? <HorizontalBars data={verdicts} unit="runs" /> : <Empty title="No runs yet" />}</Card>
-          <Card title="Open cases per analyst">{workload.some((w) => w.value > 0) ? <HorizontalBars data={workload} unit="open cases" /> : <Empty title="No cases assigned yet">Analysts pick up cases with Assign to me.</Empty>}</Card>
+          <Card title="Open cases per analyst">{workload.some((w) => w.value > 0) ? <HorizontalBars data={workload} unit="open cases" /> : <Empty title="No cases assigned yet">Assign cases from the Assign work panel, or analysts pick them up with Assign to me.</Empty>}</Card>
           <Card title="Top ATT&CK techniques">
             <ul className="space-y-1.5 text-sm">
               {d.top_techniques.map((t) => (

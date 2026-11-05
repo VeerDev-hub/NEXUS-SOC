@@ -2,39 +2,18 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Plus, Save, Trash2 } from "lucide-react";
+import { Save } from "lucide-react";
+import LLMProvidersPanel from "@/components/agents/LLMProvidersPanel";
 import { RequirePermission } from "@/components/AppShell";
-import { Badge, Button, Card, cx, Field, inputClass, Modal, PageHeader, Spinner, Table } from "@/components/ui";
-import { del, get, patch, post } from "@/lib/api";
+import { Button, Card, cx, Field, inputClass, PageHeader, Spinner } from "@/components/ui";
+import { get, patch } from "@/lib/api";
 import { toast } from "@/lib/toast";
-import type { Paginated } from "@/lib/types";
 
 interface Runtime {
   agent_llm_mode: "auto" | "online" | "offline";
   agent_max_steps: number;
   agent_auto_run: boolean;
 }
-
-interface Provider {
-  id: string;
-  name: string;
-  provider: "deepseek" | "openai" | "gemini" | "openrouter" | "ollama" | "openai_compatible";
-  base_url: string;
-  model: string;
-  api_key_configured: boolean;
-  tags: string[];
-  enabled: boolean;
-  priority: number;
-}
-
-const PROVIDERS = {
-  deepseek: { label: "DeepSeek", base_url: "https://api.deepseek.com", model: "deepseek-chat" },
-  openai: { label: "OpenAI", base_url: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
-  gemini: { label: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai/", model: "gemini-2.5-flash" },
-  openrouter: { label: "OpenRouter", base_url: "https://openrouter.ai/api/v1", model: "" },
-  ollama: { label: "Ollama (local)", base_url: "http://localhost:11434/v1", model: "qwen2.5-soc:7b-16k" },
-  openai_compatible: { label: "OpenAI-compatible (vLLM, OpenRouter...)", base_url: "http://localhost:11434/v1", model: "" },
-} as const;
 
 const MODES = [
   { value: "auto", label: "Auto", hint: "Use the LLM; fall back to the offline engine if it is unreachable or fails." },
@@ -103,144 +82,12 @@ function RuntimeForm({ initial }: { initial: Runtime }) {
   );
 }
 
-function ProviderModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const qc = useQueryClient();
-  const [form, setForm] = useState<{ provider: Provider["provider"]; name: string; base_url: string; model: string; api_key: string; tags: string; priority: number }>({ provider: "deepseek", name: "DeepSeek", base_url: PROVIDERS.deepseek.base_url, model: PROVIDERS.deepseek.model, api_key: "", tags: "", priority: 10 });
-  const create = useMutation({
-    mutationFn: () => post("/settings/llm-providers", { ...form, tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean), enabled: true }),
-    onSuccess: () => {
-      toast("Provider added", "success");
-      qc.invalidateQueries({ queryKey: ["providers"] });
-      qc.invalidateQueries({ queryKey: ["llm-status"] });
-      onClose();
-    },
-    onError: (e: Error) => toast(e.message, "error"),
-  });
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Add LLM provider"
-      wide
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" loading={create.isPending} onClick={() => create.mutate()} disabled={!form.name || !form.model}>
-            Add provider
-          </Button>
-        </>
-      }
-    >
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Provider">
-          <select
-            className={inputClass}
-            value={form.provider}
-            onChange={(e) => {
-              const key = e.target.value as Provider["provider"];
-              setForm({ ...form, provider: key, name: PROVIDERS[key].label.split(" (")[0], base_url: PROVIDERS[key].base_url, model: PROVIDERS[key].model });
-            }}
-          >
-            {Object.entries(PROVIDERS).map(([k, v]) => (
-              <option key={k} value={k}>
-                {v.label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Display name">
-          <input className={inputClass} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        </Field>
-        <Field label="Base URL">
-          <input className={inputClass} value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} />
-        </Field>
-        <Field label="Model">
-          <input className={inputClass} value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
-        </Field>
-        <Field label="API key">
-          <input type="password" className={inputClass} value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} />
-        </Field>
-        <Field label="Priority" hint="Lowest number is the primary model.">
-          <input type="number" className={inputClass} value={form.priority} onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })} />
-        </Field>
-        <div className="col-span-2">
-          <Field label="Agent tags (optional)" hint="Route specific agents to this model, e.g. agent:investigation, agent:reporting. Untagged agents use the primary model.">
-            <input className={inputClass} value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} />
-          </Field>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
 function Settings() {
-  const qc = useQueryClient();
-  const providers = useQuery({ queryKey: ["providers"], queryFn: () => get<Paginated<Provider> | Provider[]>("/settings/llm-providers") });
-  const [open, setOpen] = useState(false);
-  const list = Array.isArray(providers.data) ? providers.data : providers.data?.results ?? [];
-  const toggle = useMutation({
-    mutationFn: (p: Provider) => patch(`/settings/llm-providers/${p.id}`, { enabled: !p.enabled }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["providers"] });
-      qc.invalidateQueries({ queryKey: ["llm-status"] });
-    },
-  });
-  const remove = useMutation({
-    mutationFn: (p: Provider) => del(`/settings/llm-providers/${p.id}`),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["providers"] });
-      qc.invalidateQueries({ queryKey: ["llm-status"] });
-    },
-  });
-
   return (
     <div className="mx-auto max-w-[1100px] space-y-5">
       <PageHeader title="Platform settings" subtitle="Choose how the agents think: which LLM, and what happens when it is not available." />
       <RuntimeCard />
-      <Card
-        title="LLM providers"
-        action={
-          <Button size="sm" variant="primary" icon={<Plus className="size-3.5" />} onClick={() => setOpen(true)}>
-            Add provider
-          </Button>
-        }
-        bodyClassName="p-0"
-      >
-        {providers.isLoading ? (
-          <Spinner />
-        ) : list.length ? (
-          <Table head={["Name", "Provider", "Model", "Key", "Tags", "Priority", "Enabled", ""]}>
-            {list.map((p) => (
-              <tr key={p.id}>
-                <td className="px-3 py-2.5 font-medium">{p.name}</td>
-                <td className="px-3 py-2.5 text-xs text-ink-2">{PROVIDERS[p.provider]?.label ?? p.provider}</td>
-                <td className="px-3 py-2.5 font-mono text-xs">{p.model}</td>
-                <td className="px-3 py-2.5">{p.api_key_configured ? <Badge tone="good">set</Badge> : <Badge tone="warning">missing</Badge>}</td>
-                <td className="px-3 py-2.5 text-xs text-ink-3">{p.tags.join(", ") || "-"}</td>
-                <td className="px-3 py-2.5 tabular-nums">{p.priority}</td>
-                <td className="px-3 py-2.5">
-                  <button onClick={() => toggle.mutate(p)}>
-                    <Badge tone={p.enabled ? "good" : "neutral"}>{p.enabled ? "On" : "Off"}</Badge>
-                  </button>
-                </td>
-                <td className="px-3 py-2.5 text-right">
-                  <button onClick={() => confirm(`Remove ${p.name}?`) && remove.mutate(p)} className="text-ink-3 hover:text-critical" title="Remove">
-                    <Trash2 className="size-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </Table>
-        ) : (
-          <div className="p-4 text-sm text-ink-3">
-            No provider configured. The agents run on the offline engine. Add DeepSeek, OpenAI or Gemini to enable LLM reasoning, or set
-            <code className="mx-1">DEEPSEEK_API_KEY</code> in the backend <code>.env</code>.
-          </div>
-        )}
-      </Card>
-      <ProviderModal open={open} onClose={() => setOpen(false)} />
+      <LLMProvidersPanel />
     </div>
   );
 }

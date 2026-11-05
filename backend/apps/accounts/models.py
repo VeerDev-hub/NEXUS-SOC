@@ -28,7 +28,8 @@ class User(AbstractUser):
     role = models.CharField(max_length=30, choices=Role.choices, default=Role.TIER1_ANALYST, db_index=True)
     title = models.CharField(max_length=100, blank=True, default="", help_text="Job title shown in the UI")
     notify_on_playbook_completion = models.BooleanField(default=True)
-    notify_on_case_assignment = models.BooleanField(default=True)
+    notify_on_case_assignment = models.BooleanField(default=True, help_text="Inbox message and email when a case is assigned to this user")
+    email_alerts = models.BooleanField(default=True, help_text="Email this user when the AI team confirms a High/Critical case")
 
     class Meta:
         db_table = "users"

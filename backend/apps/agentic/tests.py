@@ -206,3 +206,46 @@ class ResponseTargetingTests(TestCase):
     def test_suspicious_powershell_gets_no_disruptive_action(self):
         types = {a for a, _ in self._actions("encoded_powershell")}
         self.assertFalse(types & {"isolate_host", "disable_user", "reset_credentials"}, types)
+
+
+@mock.patch("apps.agentic.multiagent.events._emit", lambda *a, **k: None)
+class AutoMitigationTests(TestCase):
+    def _propose(self, action_type, target, **kw):
+        return actions.create_proposal(case=make_case(), run=None, step=None, action_type=action_type, target=target, rationale="t", **kw)[0]
+
+    def test_low_severity_case_blocks_ip_automatically(self):
+        for severity in ("Low", "Medium"):
+            proposal = self._propose("block_ip", "45.77.10.99", case_severity=severity)
+            self.assertEqual(proposal.status, ActionProposalStatus.EXECUTED, severity)
+            self.assertTrue(proposal.auto_approved)
+            self.assertIn("Auto-mitigated", proposal.decision_note)
+
+    def test_high_severity_case_waits_for_human(self):
+        for severity in ("High", "Critical", "", None):
+            proposal = self._propose("block_ip", "45.77.10.99", case_severity=severity)
+            self.assertEqual(proposal.status, ActionProposalStatus.PENDING, severity)
+
+    def test_disruptive_or_critical_asset_actions_still_need_approval(self):
+        self.assertEqual(self._propose("isolate_host", "ws-12", case_severity="Low").status, ActionProposalStatus.PENDING)
+        self.assertEqual(self._propose("reset_credentials", "jdoe", case_severity="Low").status, ActionProposalStatus.PENDING)
+        bumped = self._propose("block_ip", "10.0.0.5", case_severity="Low", target_criticality="Critical")
+        self.assertEqual(bumped.status, ActionProposalStatus.PENDING)
+
+    def test_can_be_switched_off(self):
+        with self.settings(AGENT_AUTO_MITIGATE_ENABLED=False):
+            self.assertEqual(self._propose("block_ip", "45.77.10.99", case_severity="Low").status, ActionProposalStatus.PENDING)
+
+
+@mock.patch("apps.agentic.multiagent.events._emit", lambda *a, **k: None)
+class SshBruteForceScenarioTests(TestCase):
+    def test_medium_scan_is_auto_blocked_without_approval(self):
+        from apps.agentic import demo
+
+        case = demo.SCENARIOS["ssh_bruteforce"]["fn"]()
+        run = Orchestrator(gateway=LLMGateway(mode=MODE_OFFLINE), pace_ms=0).run(case, trigger="alert_created")
+        self.assertEqual(run.status, AgentRunStatus.COMPLETED)
+        self.assertIn(run.final_severity, ("Low", "Medium"))
+        block = ActionProposal.objects.get(case=case, action_type="block_ip")
+        self.assertEqual(block.status, ActionProposalStatus.EXECUTED)
+        self.assertTrue(block.auto_approved)
+        self.assertFalse(ActionProposal.objects.filter(case=case, status=ActionProposalStatus.PENDING).exists())

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Cloud, KeyRound, Mail, Radar, Skull, Zap } from "lucide-react";
+import { Cloud, KeyRound, Mail, Radar, ShieldBan, Skull, Zap } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { can, useAuth } from "@/lib/auth";
 import { toast } from "@/lib/toast";
@@ -21,6 +21,7 @@ const ICONS: Record<string, typeof Zap> = {
   phishing: Mail,
   cloud_privesc: Cloud,
   vpn_bruteforce: KeyRound,
+  ssh_bruteforce: ShieldBan,
   authorized_scan: Radar,
 };
 

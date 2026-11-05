@@ -24,7 +24,10 @@ MAX_ACTIONS = 10
 class ResponseAgent(BaseAgent):
     key = "response"
     name = "Response Agent"
-    description = "Builds a containment plan and proposes response actions. Actions above low risk wait for human approval."
+    description = (
+        "Builds a containment plan and proposes response actions. Low-risk actions, and standard containment "
+        "(e.g. blocking an IP) on Low/Medium-severity cases, run automatically; the rest wait for human approval."
+    )
     tools = ("actions.propose",)
     output_schema = ResponsePlan
 
@@ -94,6 +97,8 @@ class ResponseAgent(BaseAgent):
 
     def apply(self, ctx, output, *, run, step):
         criticality = {e["name"]: e.get("criticality") for e in (ctx.findings.get("asset_context") or {}).get("entities", [])}
+        triage = ctx.findings.get("triage") or {}
+        case_severity = triage.get("severity") or ctx.case.severity_ai or ctx.case.severity or ""
         proposals = []
         for action in output.actions:
             if action.action_type not in ACTION_CATALOG:
@@ -106,6 +111,7 @@ class ResponseAgent(BaseAgent):
                 target=action.target,
                 rationale=action.rationale,
                 target_criticality=criticality.get(action.target),
+                case_severity=case_severity,
             )
             proposals.append(proposal)
         return proposals

@@ -142,6 +142,15 @@ ALERT_EMAIL_MIN_SEVERITY = os.environ.get("ALERT_EMAIL_MIN_SEVERITY", "High")
 ALERT_EMAIL_VERDICTS = _env_list("ALERT_EMAIL_VERDICTS", "True Positive,Suspicious")
 SOC_CONSOLE_URL = os.environ.get("SOC_CONSOLE_URL", "http://localhost:3000")
 
+# Auto-mitigation: on cases at or below this severity, the Response Agent executes the
+# allow-listed containment actions itself instead of waiting for a human. Actions on
+# business-critical assets, and every action on higher-severity cases, still need approval.
+AGENT_AUTO_MITIGATE_ENABLED = _env_bool("AGENT_AUTO_MITIGATE_ENABLED", True)
+AGENT_AUTO_MITIGATE_MAX_SEVERITY = os.environ.get("AGENT_AUTO_MITIGATE_MAX_SEVERITY", "Medium")
+AGENT_AUTO_MITIGATE_ACTIONS = _env_list(
+    "AGENT_AUTO_MITIGATE_ACTIONS", "block_ip,block_domain,block_sender,quarantine_file,purge_email,revoke_sessions"
+)
+
 # ---- Live log detection --------------------------------------------------------
 LIVE_SYSLOG_HOST = os.environ.get("LIVE_SYSLOG_HOST", "0.0.0.0")
 LIVE_SYSLOG_PORT = _env_int("LIVE_SYSLOG_PORT", 5514, minimum=0)

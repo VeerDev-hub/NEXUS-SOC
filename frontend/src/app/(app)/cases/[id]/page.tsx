@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { ArrowLeft, ArrowUpRight, Bot, CheckCircle2, Hand, Play, Printer, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Bot, CheckCircle2, Hand, Play, Printer, ShieldCheck, UserPlus } from "lucide-react";
 import AgentGraph from "@/components/agents/AgentGraph";
 import AgentTimeline from "@/components/agents/AgentTimeline";
 import ProposalCard from "@/components/agents/ProposalCard";
@@ -26,7 +26,7 @@ import {
   Tabs,
   VerdictBadge,
 } from "@/components/ui";
-import { patch, post } from "@/lib/api";
+import { get, patch, post } from "@/lib/api";
 import { can, useAuth } from "@/lib/auth";
 import { formatDateTime, formatDuration, timeAgo } from "@/lib/format";
 import { useCase, useCaseAlerts, useCaseArtifacts, useCaseEnrichments, useCaseRuns, useProposals, useRun } from "@/lib/queries";
@@ -35,6 +35,68 @@ import type { Case } from "@/lib/types";
 
 type Tab = "agents" | "report" | "evidence";
 const VERDICTS = ["True Positive", "False Positive", "Benign", "Suspicious", "Insufficient Data"];
+
+interface UserOption {
+  id: number;
+  label: string;
+  username: string;
+  role: string;
+}
+
+/** Hand the case to a teammate; they get an inbox message and an email with the case details. */
+function AssignModal({ caseId, current, status, open, onClose }: { caseId: string; current: number | null; status: string; open: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const options = useQuery({
+    queryKey: ["user-options", "assignable"],
+    queryFn: () => get<UserOption[]>("/auth/user-options", { role: "tier1_analyst,tier2_responder,soc_manager,admin" }),
+    enabled: open,
+  });
+  const [assignee, setAssignee] = useState<string>("");
+  const selected = assignee || (current ? String(current) : "");
+  const save = useMutation({
+    mutationFn: () => patch(`/cases/${caseId}`, { assignee: Number(selected), status: status === "New" ? "In Progress" : status }),
+    onSuccess: () => {
+      const who = options.data?.find((o) => String(o.id) === selected)?.label ?? "teammate";
+      toast(`Case assigned to ${who}. They will get an email.`, "success");
+      qc.invalidateQueries({ queryKey: ["case", caseId] });
+      qc.invalidateQueries({ queryKey: ["cases"] });
+      onClose();
+    },
+    onError: (e: Error) => toast(e.message, "error"),
+  });
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Assign case"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" loading={save.isPending} disabled={!selected || Number(selected) === current} onClick={() => save.mutate()}>
+            Assign
+          </Button>
+        </>
+      }
+    >
+      <Field label="Teammate" hint="They receive an inbox message and an email with the case summary and a link.">
+        {options.isLoading ? (
+          <Spinner />
+        ) : (
+          <select className={inputClass} value={selected} onChange={(e) => setAssignee(e.target.value)}>
+            <option value="">Select a teammate...</option>
+            {(options.data ?? []).map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label} ({o.username})
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
+    </Modal>
+  );
+}
 
 function RunAgentsModal({ caseId, open, onClose }: { caseId: string; open: boolean; onClose: () => void }) {
   const qc = useQueryClient();
@@ -173,7 +235,7 @@ export default function CaseWarRoom() {
   // A manual run selection only sticks until a newer run starts; then we follow the live one.
   const [selection, setSelection] = useState<{ id: string; latest?: string } | null>(null);
   const [highlight, setHighlight] = useState<string | undefined>();
-  const [modal, setModal] = useState<"run" | "resolve" | "escalate" | null>(null);
+  const [modal, setModal] = useState<"run" | "resolve" | "escalate" | "assign" | null>(null);
 
   const latestRunId = runsQ.data?.[0]?.id;
   const runId = selection && selection.latest === latestRunId ? selection.id : latestRunId;
@@ -240,6 +302,11 @@ export default function CaseWarRoom() {
           {can(user, "records.write") && !closed && c.assignee !== user?.id && (
             <Button icon={<Hand className="size-4" />} loading={assign.isPending} onClick={() => assign.mutate()}>
               Assign to me
+            </Button>
+          )}
+          {can(user, "records.write") && !closed && (
+            <Button icon={<UserPlus className="size-4" />} onClick={() => setModal("assign")}>
+              {c.assignee ? "Reassign" : "Assign"}
             </Button>
           )}
           {can(user, "cases.escalate") && c.tier === "L1" && !closed && (
@@ -446,6 +513,7 @@ export default function CaseWarRoom() {
       </div>
 
       <RunAgentsModal caseId={id} open={modal === "run"} onClose={() => setModal(null)} />
+      {modal === "assign" && <AssignModal caseId={id} current={c.assignee} status={c.status} open onClose={() => setModal(null)} />}
       {modal === "resolve" && <ResolveModal c={c} open onClose={() => setModal(null)} />}
       {modal === "escalate" && <EscalateModal c={c} open onClose={() => setModal(null)} />}
     </div>

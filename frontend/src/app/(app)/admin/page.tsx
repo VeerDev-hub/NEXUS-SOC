@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Bot, Cpu, Server, Settings, Users } from "lucide-react";
 import { RequirePermission } from "@/components/AppShell";
+import AssignWorkPanel from "@/components/AssignWorkPanel";
 import LaunchScenario from "@/components/LaunchScenario";
 import RunFeed from "@/components/RunFeed";
 import SocPosture from "@/components/SocPosture";
@@ -72,6 +73,8 @@ function Console() {
       <div className="mb-5">
         <SocPosture compact />
       </div>
+
+      <AssignWorkPanel className="mb-5" />
 
       <div className="grid gap-5 xl:grid-cols-3">
         <Card title="Background workers" className="xl:col-span-2" bodyClassName="p-0">

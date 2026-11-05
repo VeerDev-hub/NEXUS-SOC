@@ -6,7 +6,7 @@ from html import escape
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 
-from apps.agentic.models import AgentRun
+from apps.agentic.models import ActionProposalStatus, AgentRun
 
 from .models import NotificationChannel, NotificationLog, NotificationStatus
 
@@ -16,8 +16,32 @@ SEVERITY_RANK = {"Unknown": 0, "Informational": 0, "Low": 1, "Medium": 2, "High"
 _SEVERITY_COLOUR = {"Critical": "#c62828", "High": "#ef6c00", "Medium": "#f9a825", "Low": "#2e7d32"}
 
 
+# Seeded/demo accounts use addresses like analyst@soc.demo; never try to deliver to those.
+_PLACEHOLDER_DOMAINS = (".demo", ".local", ".localhost", ".test", ".invalid", ".example", "example.com", "example.org")
+
+
+def is_deliverable(address):
+    address = (address or "").strip().lower()
+    return "@" in address and not address.endswith(_PLACEHOLDER_DOMAINS)
+
+
+def _unique(addresses):
+    seen, result = set(), []
+    for address in addresses:
+        address = (address or "").strip()
+        if address and address.lower() not in seen:
+            seen.add(address.lower())
+            result.append(address)
+    return result
+
+
 def alert_recipients():
-    return [address for address in settings.ALERT_EMAIL_TO if address]
+    """ALERT_EMAIL_TO from .env plus every active teammate who opted in to alert emails."""
+    from apps.accounts.models import User
+
+    team = User.objects.filter(is_active=True, email_alerts=True).exclude(email="").values_list("email", flat=True)
+    # Addresses typed into .env are trusted as-is; user accounts skip placeholder (demo) domains.
+    return _unique([*settings.ALERT_EMAIL_TO, *(email for email in team if is_deliverable(email))])
 
 
 def should_notify(verdict, severity):
@@ -46,7 +70,7 @@ def _latest_alert(case):
 def build_case_email(case, *, verdict, severity, summary="", report=None):
     report = report or {}
     alert = _latest_alert(case)
-    reference = case.case_id or str(case.pk)
+    reference = (case.case_id or str(case.pk)).upper()
     subject = f"[NEXUS-SOC][{severity or 'Unknown'}] {verdict}: {case.title}"[:300]
 
     details = [
@@ -168,3 +192,83 @@ def notify_case_verdict(run):
         agent_run=run if isinstance(run, AgentRun) else None,
         recipients=recipients,
     )
+
+
+def _assignment_email(case, assignee, actor):
+    alert = _latest_alert(case)
+    reference = (case.case_id or str(case.pk)).upper()
+    severity = case.severity_ai or case.severity or "Unknown"
+    verdict = case.verdict_ai or case.verdict or "Pending"
+    actor_name = (actor.get_full_name() or actor.username) if actor else "NEXUS-SOC"
+    name = assignee.get_full_name() or assignee.username
+    link = case_url(case)
+    subject = f"[NEXUS-SOC][{severity}] Case {reference} assigned to you: {case.title}"[:300]
+    details = [
+        ("Case", reference),
+        ("Assigned by", actor_name),
+        ("Severity", severity),
+        ("AI verdict", verdict),
+        ("Status", case.status),
+    ]
+    if alert is not None:
+        details.append(("Detection", alert.rule_name or alert.rule_id or alert.title))
+    pending = list(case.action_proposals.filter(status=ActionProposalStatus.PENDING).values_list("action_type", "target")[:8])
+    latest_run = case.agent_runs.exclude(summary="").order_by("-created_at").first()
+    summary = (latest_run.summary if latest_run else "") or case.description
+
+    lines = [f"Hi {name},", "", f"{actor_name} assigned case {reference} to you.", ""]
+    lines += [f"{label}: {value}" for label, value in details]
+    lines += ["", "Summary", "-------", summary or "n/a"]
+    if pending:
+        lines += ["", "Actions waiting for approval", "----------------------------", *[f"- {a}: {t}" for a, t in pending]]
+    lines += ["", f"Open the case: {link}", "", "This message was sent automatically by NEXUS-SOC."]
+
+    colour = _SEVERITY_COLOUR.get(severity, "#455a64")
+    rows = "".join(
+        f'<tr><td style="padding:4px 12px 4px 0;color:#607d8b;white-space:nowrap">{escape(label)}</td>'
+        f'<td style="padding:4px 0">{escape(str(value))}</td></tr>'
+        for label, value in details
+    )
+    pending_html = (
+        '<h3 style="margin:20px 0 6px;font-size:15px">Actions waiting for approval</h3><ul style="margin:0;padding-left:20px">'
+        + "".join(f"<li>{escape(a)}: {escape(t)}</li>" for a, t in pending) + "</ul>"
+    ) if pending else ""
+    html = f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:24px;background:#f4f6f8;font-family:Segoe UI,Arial,sans-serif;color:#1c2833">
+<div style="max-width:640px;margin:auto;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #dde3e8">
+  <div style="background:{colour};color:#fff;padding:16px 24px">
+    <div style="font-size:12px;letter-spacing:1px;opacity:.9">NEXUS-SOC CASE ASSIGNMENT</div>
+    <div style="font-size:19px;font-weight:600;margin-top:4px">{escape(reference)} &middot; {escape(severity)}</div>
+  </div>
+  <div style="padding:20px 24px">
+    <p style="margin:0 0 12px">Hi {escape(name)}, <b>{escape(actor_name)}</b> assigned this case to you.</p>
+    <h2 style="margin:0 0 14px;font-size:17px">{escape(case.title)}</h2>
+    <table style="border-collapse:collapse;font-size:14px">{rows}</table>
+    <h3 style="margin:20px 0 6px;font-size:15px">Summary</h3>
+    <p style="margin:0;line-height:1.5;font-size:14px">{escape(summary or 'n/a')}</p>
+    {pending_html}
+    <p style="margin:24px 0 4px"><a href="{escape(link)}" style="background:#1565c0;color:#fff;text-decoration:none;padding:10px 18px;border-radius:5px;display:inline-block">Open case in NEXUS-SOC</a></p>
+  </div>
+  <div style="padding:12px 24px;background:#fafbfc;color:#90a4ae;font-size:12px">Sent automatically by NEXUS-SOC.</div>
+</div></body></html>"""
+    return subject, "\n".join(lines), html
+
+
+def send_assignment_email(case, assignee, *, actor=None):
+    """Email a teammate that a case was assigned to them. Returns the NotificationLog or None if skipped."""
+    if not settings.ALERT_EMAIL_ENABLED or not is_deliverable(getattr(assignee, "email", "")):
+        return None
+    subject, text_body, html_body = _assignment_email(case, assignee, actor)
+    log = NotificationLog(case=case, channel=NotificationChannel.EMAIL, recipients=[assignee.email], subject=subject)
+    try:
+        message = EmailMultiAlternatives(subject, text_body, settings.DEFAULT_FROM_EMAIL, [assignee.email])
+        message.attach_alternative(html_body, "text/html")
+        message.send(fail_silently=False)
+        log.status = NotificationStatus.SENT
+        logger.info("Assignment email for case %s sent to %s", case.pk, assignee.email)
+    except Exception as exc:
+        log.status = NotificationStatus.FAILED
+        log.error = f"{type(exc).__name__}: {exc}"[:2000]
+        logger.error("Assignment email for case %s failed: %s", case.pk, log.error)
+    log.save()
+    return log

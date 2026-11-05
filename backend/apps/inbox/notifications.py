@@ -81,6 +81,21 @@ def notify_playbook_completion(playbook):
         return None
 
 
+def _email_assignment_after_commit(case, assignee, actor):
+    """Email the assignee once the assignment is committed, so a slow/failed SMTP never breaks the save."""
+    from django.db import transaction
+
+    from apps.notifications.service import send_assignment_email
+
+    def _send():
+        try:
+            send_assignment_email(case, assignee, actor=actor)
+        except Exception:
+            logger.exception("Assignment email failed: case_id=%s user_id=%s", getattr(case, "pk", None), getattr(assignee, "pk", None))
+
+    transaction.on_commit(_send)
+
+
 def notify_case_assignment(case, *, previous_assignee_id=None, actor=None):
     assignee_id = None
     try:
@@ -96,6 +111,7 @@ def notify_case_assignment(case, *, previous_assignee_id=None, actor=None):
         case_label = _record_label(case, "case_id")
         actor_name = _user_display_name(actor)
         body = f"{actor_name} assigned Case {case_label} to you."
+        _email_assignment_after_commit(case, assignee, actor)
 
         return send_system_message(
             recipients=[assignee],

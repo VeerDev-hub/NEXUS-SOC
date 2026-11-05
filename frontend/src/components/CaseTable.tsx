@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { Bot, Loader2 } from "lucide-react";
+import { useAuth } from "@/lib/auth";
 import { useRuns } from "@/lib/queries";
 import { timeAgo } from "@/lib/format";
 import type { Case } from "@/lib/types";
+import AssigneeSelect, { canAssignOthers } from "./AssigneeSelect";
 import { Badge, Empty, SeverityBadge, StatusBadge, Table, VerdictBadge } from "./ui";
 
 export default function CaseTable({ cases, emptyTitle = "No cases", showTier = true }: { cases: Case[]; emptyTitle?: string; showTier?: boolean }) {
   const running = useRuns({ status: "Running" });
+  const canAssign = canAssignOthers(useAuth((s) => s.user));
   const runningCases = new Set((running.data?.results ?? []).map((r) => r.case_pk));
 
   if (!cases.length) return <Empty title={emptyTitle} />;
@@ -50,7 +53,13 @@ export default function CaseTable({ cases, emptyTitle = "No cases", showTier = t
               <Badge tone={c.tier === "L2" ? "serious" : "neutral"}>{c.tier}</Badge>
             </td>
           )}
-          <td className="whitespace-nowrap px-3 py-2.5 text-xs text-ink-2">{c.assignee_name || <span className="text-ink-3">unassigned</span>}</td>
+          <td className="whitespace-nowrap px-3 py-2.5 text-xs text-ink-2">
+            {canAssign && c.status !== "Resolved" && c.status !== "Closed" ? (
+              <AssigneeSelect c={c} />
+            ) : (
+              c.assignee_name || <span className="text-ink-3">unassigned</span>
+            )}
+          </td>
           <td className="whitespace-nowrap px-3 py-2.5 text-xs text-ink-3">{timeAgo(c.updated_at)}</td>
         </tr>
       ))}

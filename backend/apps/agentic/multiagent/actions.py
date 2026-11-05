@@ -5,6 +5,8 @@ catalogue. The risk tier of each action is decided here by policy, not by the
 LLM, and is raised one level when the target is a business-critical asset.
 
     Low      -> auto-approved and executed by policy (logged as such)
+    Medium   -> also auto-executed when the *case* is low severity (Low/Medium by
+                default) and the action is on AGENT_AUTO_MITIGATE_ACTIONS
     Medium   -> needs a Tier-2 Incident Responder (or Manager/Admin)
     High     -> needs a Tier-2 Incident Responder (or Manager/Admin)
     Critical -> needs a SOC Manager (or Admin)
@@ -16,6 +18,7 @@ returns a realistic result payload so the workflow is demonstrable end to end.
 import logging
 import uuid
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -61,6 +64,25 @@ def required_role_for(risk_level):
     if risk_level == ActionRiskLevel.CRITICAL:
         return ROLE_MANAGER
     return ROLE_TIER2
+
+
+CASE_SEVERITY_RANK = {"Informational": 0, "Low": 1, "Medium": 2, "High": 3, "Critical": 4}
+
+
+def auto_mitigation_reason(action_type, risk_level, case_severity):
+    """Why this action may run without a human, or '' if it must wait for approval."""
+    if risk_level == ActionRiskLevel.LOW:
+        return "Auto-approved by policy (low-risk action)."
+    if not getattr(settings, "AGENT_AUTO_MITIGATE_ENABLED", False):
+        return ""
+    # Only Medium-risk actions qualify: a critical-asset bump to High always needs a human.
+    if risk_level != ActionRiskLevel.MEDIUM or action_type not in getattr(settings, "AGENT_AUTO_MITIGATE_ACTIONS", ()):
+        return ""
+    limit = CASE_SEVERITY_RANK.get(getattr(settings, "AGENT_AUTO_MITIGATE_MAX_SEVERITY", "Medium"), 2)
+    rank = CASE_SEVERITY_RANK.get(case_severity or "")
+    if rank is None or rank > limit:
+        return ""
+    return f"Auto-mitigated by policy: {case_severity}-severity case, '{action_type}' is on the auto-mitigation list."
 
 
 def can_approve(user_role, proposal):
@@ -118,7 +140,7 @@ def decide_proposal(proposal, *, user, approve, note=""):
     return locked
 
 
-def create_proposal(*, case, run, step, action_type, target, rationale, target_criticality=None):
+def create_proposal(*, case, run, step, action_type, target, rationale, target_criticality=None, case_severity=None):
     risk = assess_risk(action_type, target_criticality=target_criticality)
     proposal, created = ActionProposal.objects.get_or_create(
         case=case,
@@ -132,11 +154,12 @@ def create_proposal(*, case, run, step, action_type, target, rationale, target_c
             "required_role": required_role_for(risk),
         },
     )
-    if created and risk == ActionRiskLevel.LOW:
+    auto_reason = auto_mitigation_reason(action_type, risk, case_severity) if created else ""
+    if auto_reason:
         proposal.status = ActionProposalStatus.APPROVED
         proposal.auto_approved = True
         proposal.decided_at = timezone.now()
-        proposal.decision_note = "Auto-approved by policy (low-risk action)."
+        proposal.decision_note = auto_reason
         proposal.save(update_fields=["status", "auto_approved", "decided_at", "decision_note", "updated_at"])
         proposal = execute_proposal(proposal)
     return proposal, created

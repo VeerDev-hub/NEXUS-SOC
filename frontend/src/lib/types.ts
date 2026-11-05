@@ -31,6 +31,8 @@ export interface User {
   is_active: boolean;
   last_login: string | null;
   date_joined: string;
+  email_alerts?: boolean;
+  notify_on_case_assignment?: boolean;
 }
 
 export interface Paginated<T> {
